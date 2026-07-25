@@ -67,3 +67,7 @@ The script also emits the results as objects on the pipeline, so it can be piped
   The version/build value itself is located by searching the JSON response recursively for
   fields such as `product_version`, `version`, `build_number`, so a differently shaped
   response usually still parses.
+
+## Next steps
+
+See [ROADMAP.md](ROADMAP.md) for verification tasks, ideas and hardening steps.
