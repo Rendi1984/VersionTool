@@ -725,7 +725,9 @@ foreach ($product in $config.products) {
         Write-Host ("  version {0} (build {1}) - {2}" -f `
             $record.InstalledVersion, $record.InstalledBuild, (Get-StatusLabel -Status $record.Status))
     } else {
-        Write-Warning ("  failed: {0}" -f $record.Error)
+        # Name the product: Write-Warning prefixes "WARNING:" and PowerShell may wrap the
+        # line, which visually detaches it from the "Checking <name> ..." line above.
+        Write-Warning ("{0} failed: {1}" -f $productName, $record.Error)
     }
 }
 
