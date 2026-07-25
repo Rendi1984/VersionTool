@@ -6,13 +6,8 @@
   "products": [
     {
       "name": "ADAudit Plus",
-      "key": "adauditplus",
       "baseUrl": "https://adaudit.corp.local:8081",
-      "authMode": "header",
-      "authHeaderName": "AUTHTOKEN",
-      "authQueryName": "AUTHTOKEN",
       "tokenEnvVar": "ME_ADAUDIT_TOKEN",
-      "token": "",
       "endpoints": [
         "/api/json/aboutproduct",
         "/api/json/admin/getProductDetails",
@@ -23,13 +18,8 @@
     },
     {
       "name": "ADSelfService Plus",
-      "key": "adselfserviceplus",
       "baseUrl": "https://adssp.corp.local:8888",
-      "authMode": "header",
-      "authHeaderName": "authtoken",
-      "authQueryName": "AUTHTOKEN",
       "tokenEnvVar": "ME_ADSSP_TOKEN",
-      "token": "",
       "endpoints": [
         "/RestAPI/BuildDetails",
         "/api/json/aboutproduct",
@@ -40,13 +30,8 @@
     },
     {
       "name": "Key Manager Plus",
-      "key": "keymanagerplus",
       "baseUrl": "https://kmp.corp.local:7272",
-      "authMode": "header",
-      "authHeaderName": "AUTHTOKEN",
-      "authQueryName": "AUTHTOKEN",
       "tokenEnvVar": "ME_KMP_TOKEN",
-      "token": "",
       "endpoints": [
         "/api/json/aboutproduct",
         "/restapi/json/v1/serverinfo",

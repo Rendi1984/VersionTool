@@ -20,12 +20,32 @@ Products covered by the sample config:
    notepad .\config.json
    ```
 
-   Per product set:
-   - `baseUrl` - scheme, host and web port of the product (e.g. `https://adaudit.corp.local:8081`)
-   - `endpoints` - API paths to try, in order; the first one that returns a version wins
-   - `latestVersion` / `latestBuild` - the reference values you compare against
-   - `authMode` - `header` (default) or `query`, depending on how the product accepts the token
-   - `tokenEnvVar` - name of the environment variable holding that product's AUTHTOKEN
+   Per product there are only five fields to set:
+
+   | Field | What it is |
+   |---|---|
+   | `name` | Display name shown in the report |
+   | `baseUrl` | Scheme, host and web port of the product (e.g. `https://adaudit.corp.local:8081`) |
+   | `tokenEnvVar` | Name of the environment variable holding that product's token |
+   | `endpoints` | API paths to try, in order; the first one that returns a version wins |
+   | `latestVersion` / `latestBuild` | The reference values the installed version is compared against |
+
+   The token itself is never written in the config - `tokenEnvVar` only holds the *name*
+   of the environment variable that carries it. See step 2.
+
+   Report-wide fields at the top of the file: `reportTitle`, `outputPath` (where the HTML
+   is written), `timeoutSec` (per API call) and `skipCertificateCheck`.
+
+   <details>
+   <summary>Optional fields (defaults are correct for all three products - only add these if a product rejects the token)</summary>
+
+   - `authMode` - `header` (default) or `query`: send the token as an HTTP header or as a
+     URL parameter
+   - `authHeaderName` - name of the header, default `AUTHTOKEN` (used when `authMode` is `header`)
+   - `authQueryName` - name of the URL parameter, default `AUTHTOKEN` (used when `authMode` is `query`)
+   - `token` - the token inline instead of via environment variable. Works, but stores a
+     secret on disk - prefer `tokenEnvVar`.
+   </details>
 
 2. Generate an API token in each product's console (Admin > API / Technician key) and
    expose it as an environment variable:
@@ -36,8 +56,11 @@ Products covered by the sample config:
    $env:ME_KMP_TOKEN     = "..."
    ```
 
-   Tokens can also be placed in the `token` field of the config, but that stores a
-   secret on disk - prefer the environment variable.
+   The script reads each product's token from the variable named in its `tokenEnvVar`,
+   and sends it as the `AUTHTOKEN` HTTP header. Note that variables set this way only
+   live in the current PowerShell window; for a scheduled task set them at user or
+   machine level, e.g.
+   `[Environment]::SetEnvironmentVariable('ME_ADAUDIT_TOKEN','...','User')`.
 
 ## Run
 
