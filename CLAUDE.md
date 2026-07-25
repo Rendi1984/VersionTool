@@ -20,6 +20,9 @@ Tokens are supplied per product via environment variables named in `tokenEnvVar`
 ## Deliverable packaging (always)
 Whenever files are produced for the user, all three of these are required - no exceptions:
 1. **Package as ZIP**, named `VersionTool-v<version>.zip`, where `<version>` is read from `VERSION`.
+   The ZIP contains **every tracked file in the repository**, not just the ones that changed -
+   build it with `git archive` so nothing is left out. Never include `config.json` (it can hold
+   real tokens); `config.sample.json` ships instead.
 2. **Provide a download link** - send the ZIP with `SendUserFile`, and also link the files on the
    pushed branch in GitHub.
 3. **Write run instructions** - the exact command to launch the tool, its parameters/switches, and
