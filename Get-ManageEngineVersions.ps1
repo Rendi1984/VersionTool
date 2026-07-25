@@ -55,6 +55,10 @@ param(
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
+# Keep in step with the VERSION file. Printed at startup and in the HTML report so the
+# running copy identifies itself even if the file was renamed or copied elsewhere.
+$script:ToolVersion = '1.2.2'
+
 # ---------------------------------------------------------------------------
 # TLS / certificate handling
 # ---------------------------------------------------------------------------
@@ -714,7 +718,7 @@ function New-MeHtmlReport {
 <body>
 <div class="wrap">
   <h1>$(ConvertTo-HtmlText $Title)</h1>
-  <div class="sub">Generated $generated on $(ConvertTo-HtmlText $env:COMPUTERNAME)</div>
+  <div class="sub">Generated $generated on $(ConvertTo-HtmlText $env:COMPUTERNAME) by VersionTool v$(ConvertTo-HtmlText $script:ToolVersion)</div>
 
   <div class="cards">
     <div class="card"><div class="n">$total</div><div class="l">Products checked</div></div>
@@ -760,6 +764,8 @@ $rowsHtml
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+Write-Host ("VersionTool v{0} - {1}" -f $script:ToolVersion, $MyInvocation.MyCommand.Name) -ForegroundColor Cyan
+
 $config = Import-MeConfig -Path $ConfigPath
 
 $skipCert = [bool](Get-ConfigValue -Object $config -Name 'skipCertificateCheck' -Default $false)

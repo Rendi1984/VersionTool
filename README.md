@@ -73,6 +73,14 @@ Products covered by the sample config:
 
 ## Run
 
+Inside the distributed ZIP the script carries its version in the filename
+(`Get-ManageEngineVersions-v1.2.2.ps1`) so it is clear which build is being run; in this
+repository it keeps the plain name. Either way it prints its version on startup:
+
+```
+VersionTool v1.2.2 - Get-ManageEngineVersions-v1.2.2.ps1
+```
+
 ```powershell
 powershell.exe -ExecutionPolicy Bypass -File .\Get-ManageEngineVersions.ps1 -Show
 ```

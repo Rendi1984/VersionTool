@@ -25,6 +25,9 @@ Whenever files are produced for the user, all three of these are required - no e
    Never include `config.json`: it can hold real tokens.
    Put the files at the **root of the archive, with no wrapper folder** - extracting already
    creates a folder, so a prefix directory just nests one inside another.
+   Inside the ZIP the script is named `Get-ManageEngineVersions-v<version>.ps1`, so it is
+   obvious which build is being run. The repository keeps the unversioned name.
+   `$script:ToolVersion` inside the script must match `VERSION` - bump both together.
 2. **Provide a download link** - send the ZIP with `SendUserFile`, and also link the files on the
    pushed branch in GitHub.
 3. **Write run instructions** - the exact command to launch the tool, its parameters/switches, and
