@@ -28,6 +28,9 @@ Whenever files are produced for the user, all three of these are required - no e
 3. **Write run instructions** - the exact command to launch the tool, its parameters/switches, and
    any prerequisite setup (config to copy, environment variables/tokens to set). Include them both
    in the reply and in `README.md` inside the ZIP.
+4. **Open a pull request** for the branch and include its link in the reply. Do this for every
+   change pushed - no need to ask first. If a PR is already open for the branch, push to it
+   rather than opening a second one.
 
 ---
 
