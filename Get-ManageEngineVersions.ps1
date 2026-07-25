@@ -92,7 +92,7 @@ function Import-MeConfig {
     if (-not (Test-Path -LiteralPath $Path)) {
         $sample = Join-Path (Get-ScriptDirectory) 'config.sample.json'
         if (Test-Path -LiteralPath $sample) {
-            throw "Config file not found: $Path. Copy config.sample.json to config.json and edit it."
+            throw "Config file not found: $Path. Create it by running:  Copy-Item '$sample' '$Path'   and then edit it."
         }
         throw "Config file not found: $Path"
     }
@@ -119,18 +119,56 @@ function Get-ConfigValue {
     return $value
 }
 
+function Test-LooksLikeToken {
+    <#
+        A tokenEnvVar is supposed to hold the NAME of an environment variable
+        (ME_ADAUDIT_TOKEN), not the token itself. Environment variable names are
+        short and use letters, digits and underscores; a ManageEngine AUTHTOKEN is
+        long and usually contains dashes. Used only to produce a helpful error.
+    #>
+    param([string]$Value)
+
+    if ([string]::IsNullOrWhiteSpace($Value)) { return $false }
+    if ($Value.Length -ge 24) { return $true }
+    if ($Value -match '[^A-Za-z0-9_]') { return $true }
+    return $false
+}
+
 function Resolve-ProductToken {
+    <#
+        Returns a PSCustomObject with:
+          Token - the token string, or $null when it could not be resolved
+          Error - why not, phrased so the fix is obvious
+    #>
     param($Product)
 
-    $token = Get-ConfigValue -Object $Product -Name 'token'
-    if ($token) { return [string]$token }
+    $result = [PSCustomObject]@{ Token = $null; Error = $null }
 
-    $envVar = Get-ConfigValue -Object $Product -Name 'tokenEnvVar'
-    if ($envVar) {
-        $fromEnv = [Environment]::GetEnvironmentVariable([string]$envVar)
-        if (-not [string]::IsNullOrWhiteSpace($fromEnv)) { return $fromEnv }
+    $token = Get-ConfigValue -Object $Product -Name 'token'
+    if ($token) {
+        $result.Token = [string]$token
+        return $result
     }
-    return $null
+
+    $envVar = [string](Get-ConfigValue -Object $Product -Name 'tokenEnvVar')
+    if ([string]::IsNullOrWhiteSpace($envVar)) {
+        $result.Error = 'No token configured. Set "tokenEnvVar" to the name of an environment variable holding the token.'
+        return $result
+    }
+
+    $fromEnv = [Environment]::GetEnvironmentVariable($envVar)
+    if (-not [string]::IsNullOrWhiteSpace($fromEnv)) {
+        $result.Token = $fromEnv
+        return $result
+    }
+
+    if (Test-LooksLikeToken -Value $envVar) {
+        $result.Error = 'The value of "tokenEnvVar" looks like the token itself. That field takes the NAME of an environment variable (for example ME_ADAUDIT_TOKEN); put the token in that variable, or move it into the "token" field instead.'
+    }
+    else {
+        $result.Error = "Environment variable '$envVar' is not set. Set it to the API token of this product, for example: `$env:$envVar = '<token>'"
+    }
+    return $result
 }
 
 # ---------------------------------------------------------------------------
@@ -356,11 +394,12 @@ function Test-MeProduct {
         return $record
     }
 
-    $token = Resolve-ProductToken -Product $Product
-    if (-not $token) {
-        $record.Error = 'No API token available (set the configured tokenEnvVar or the token field)'
+    $auth = Resolve-ProductToken -Product $Product
+    if (-not $auth.Token) {
+        $record.Error = $auth.Error
         return $record
     }
+    $token = $auth.Token
 
     $endpoints = @(Get-ConfigValue -Object $Product -Name 'endpoints' -Default @())
     if ($endpoints.Count -eq 0) {

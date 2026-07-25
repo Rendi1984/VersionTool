@@ -78,6 +78,55 @@ Options:
 The script also emits the results as objects on the pipeline, so it can be piped into
 `Export-Csv` or used inside a larger monitoring script.
 
+## Troubleshooting
+
+**`Config file not found: ...\config.json`**
+
+The script reads `config.json`, which does not ship - `config.sample.json` is the template.
+Create your copy first, in the same folder as the script:
+
+```powershell
+cd C:\Temp\VersionTool
+Copy-Item .\config.sample.json .\config.json
+notepad .\config.json
+```
+
+**`The value of "tokenEnvVar" looks like the token itself`**
+
+`tokenEnvVar` takes the **name** of an environment variable, not the token. Leave the name as
+shipped and put the token in the variable:
+
+```powershell
+# config.json keeps:  "tokenEnvVar": "ME_KMP_TOKEN"
+$env:ME_KMP_TOKEN = "A5FA6962-9108-4AFB-926B-1BE68A59A00D"
+```
+
+To keep the token in the file instead, add a `token` field to that product and leave
+`tokenEnvVar` alone:
+
+```json
+"tokenEnvVar": "ME_KMP_TOKEN",
+"token": "A5FA6962-9108-4AFB-926B-1BE68A59A00D",
+```
+
+That stores a secret on disk. `config.json` is gitignored, so it is never committed - but the
+environment variable is still the safer option.
+
+**`Environment variable 'X' is not set`**
+
+The name in `tokenEnvVar` is right, but the variable is empty in this window. Variables set with
+`$env:NAME = "..."` disappear when the window closes; for a scheduled task set them permanently:
+
+```powershell
+[Environment]::SetEnvironmentVariable('ME_KMP_TOKEN','<token>','User')
+```
+
+**A product reports as unreachable**
+
+`config.sample.json` ships placeholder hosts (`adaudit.corp.local`, `adssp.corp.local`). Point
+`baseUrl` at your real servers, or delete the products you do not use - otherwise every run
+reports them as unreachable. Run with `-Verbose` to see each endpoint being tried.
+
 ## Notes
 
 - Written for Windows PowerShell 5.1; no PowerShell 7 syntax is used.

@@ -1,4 +1,16 @@
 {
+  "_help": [
+    "Copy this file to config.json before running, then edit the copy.",
+    "IMPORTANT: 'tokenEnvVar' is the NAME of an environment variable, not the token.",
+    "  Example: keep \"tokenEnvVar\": \"ME_ADAUDIT_TOKEN\" here, and before running do:",
+    "    $env:ME_ADAUDIT_TOKEN = '<the token from the product console>'",
+    "  To put the token in this file instead, add a \"token\": \"<token>\" field to the",
+    "  product and leave tokenEnvVar alone. That stores a secret on disk, so config.json",
+    "  is gitignored - never commit it.",
+    "Set 'baseUrl' of every product to your real server, or delete the products you do",
+    "  not use - a leftover placeholder host just reports as unreachable.",
+    "Lines starting with _ are ignored by the script."
+  ],
   "reportTitle": "ManageEngine Version Report",
   "outputPath": "ManageEngine-Versions.html",
   "timeoutSec": 30,

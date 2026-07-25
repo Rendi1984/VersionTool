@@ -20,14 +20,15 @@ Tokens are supplied per product via environment variables named in `tokenEnvVar`
 ## Deliverable packaging (always)
 Whenever files are produced for the user, all three of these are required - no exceptions:
 1. **Package as ZIP**, named `VersionTool-v<version>.zip`, where `<version>` is read from `VERSION`.
-   The ZIP contains **every tracked file in the repository**, not just the ones that changed -
-   build it with `git archive` so nothing is left out. Never include `config.json` (it can hold
-   real tokens); `config.sample.json` ships instead.
+   The ZIP holds **only what is needed to run the tool** - today that is
+   `Get-ManageEngineVersions.ps1` and `config.sample.json`. No documentation, no project files.
+   Never include `config.json`: it can hold real tokens.
 2. **Provide a download link** - send the ZIP with `SendUserFile`, and also link the files on the
    pushed branch in GitHub.
 3. **Write run instructions** - the exact command to launch the tool, its parameters/switches, and
-   any prerequisite setup (config to copy, environment variables/tokens to set). Include them both
-   in the reply and in `README.md` inside the ZIP.
+   any prerequisite setup (config to copy, environment variables/tokens to set). These live in the
+   **`.md` files in git** (`README.md` is the reference), and are repeated in the chat reply.
+   They do not ship inside the ZIP.
 4. **Open a pull request** for the branch and include its link in the reply. Do this for every
    change pushed - no need to ask first. If a PR is already open for the branch, push to it
    rather than opening a second one.
