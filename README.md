@@ -83,6 +83,26 @@ Options:
 - `-OutputPath <path>` - where to write the HTML (default: value of `outputPath` in the config)
 - `-Show` - open the report in the default browser when finished
 - `-Verbose` - log every endpoint that is tried
+- `-Product <name>` - check only the named product(s); a partial name is enough, e.g.
+  `-Product "Key Manager"`. Accepts several: `-Product "Key Manager","ADAudit"`
+
+## Checking only the products you have installed
+
+The config ships with three products, but you probably do not run all of them. Two ways to
+narrow it down, neither of which requires deleting anything:
+
+- **Permanently** - add `"enabled": false` to a product in `config.json`:
+
+  ```json
+  { "name": "ADAudit Plus", "enabled": false, ... }
+  ```
+
+  Skipped products are listed at the start of the run. Products without an `enabled` field
+  are checked as usual.
+
+- **For one run** - `-Product "Key Manager"`.
+
+Deleting the product's entry works too; `enabled` just keeps the settings around for later.
 
 The script also emits the results as objects on the pipeline, so it can be piped into
 `Export-Csv` or used inside a larger monitoring script.
@@ -95,9 +115,11 @@ Expected on the very first run: the script created `config.json` for you from th
 opened it in Notepad. Edit it (real `baseUrl` per product, or delete the products you do not
 use), set your tokens, then run the script again.
 
-**`The value of "tokenEnvVar" looks like the token itself`**
+**Warning: `"tokenEnvVar" holds what looks like the token itself`**
 
-`tokenEnvVar` takes the **name** of an environment variable, not the token. Leave the name as
+Not fatal - the script uses the value as the token and carries on. `tokenEnvVar` is meant to
+hold the **name** of an environment variable, so pasting the token there is a mismatch worth
+cleaning up. To silence the warning, either rename that field to `token`, or leave the name as
 shipped and put the token in the variable:
 
 ```powershell

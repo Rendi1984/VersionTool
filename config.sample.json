@@ -9,6 +9,8 @@
     "  is gitignored - never commit it.",
     "Set 'baseUrl' of every product to your real server, or delete the products you do",
     "  not use - a leftover placeholder host just reports as unreachable.",
+    "Not every product is installed everywhere: add \"enabled\": false to a product to",
+    "  skip it permanently, or run with -Product \"Key Manager\" to check just one.",
     "'latestVersion' and 'latestBuild' ship EMPTY on purpose: they are the reference you",
     "  compare against, and only you know which release your organisation treats as",
     "  current. Leave them empty to just report the installed version, or fill them in",
@@ -23,6 +25,7 @@
   "products": [
     {
       "name": "ADAudit Plus",
+      "enabled": true,
       "baseUrl": "https://adaudit.corp.local:8081",
       "tokenEnvVar": "ME_ADAUDIT_TOKEN",
       "endpoints": [
@@ -35,6 +38,7 @@
     },
     {
       "name": "ADSelfService Plus",
+      "enabled": true,
       "baseUrl": "https://adssp.corp.local:8888",
       "tokenEnvVar": "ME_ADSSP_TOKEN",
       "endpoints": [
@@ -47,6 +51,7 @@
     },
     {
       "name": "Key Manager Plus",
+      "enabled": true,
       "baseUrl": "https://kmp.corp.local:7272",
       "tokenEnvVar": "ME_KMP_TOKEN",
       "endpoints": [

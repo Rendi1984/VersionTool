@@ -27,20 +27,29 @@
 .PARAMETER Show
     Open the HTML report in the default browser when done.
 
+.PARAMETER Product
+    Check only the named product(s). Matches the "name" field, case-insensitively, and a
+    partial name is enough. Use this for a one-off check without editing the config.
+
 .EXAMPLE
     powershell.exe -ExecutionPolicy Bypass -File .\Get-ManageEngineVersions.ps1 -Show
+
+.EXAMPLE
+    .\Get-ManageEngineVersions.ps1 -Product "Key Manager" -Verbose
 
 .EXAMPLE
     .\Get-ManageEngineVersions.ps1 -ConfigPath .\prod.json -OutputPath C:\Reports\me.html
 
 .NOTES
-    Tool version: 1.0.0
+    Products that are not installed can be switched off permanently by adding
+    "enabled": false to their entry in the config, instead of deleting them.
 #>
 [CmdletBinding()]
 param(
     [string]$ConfigPath,
     [string]$OutputPath,
-    [switch]$Show
+    [switch]$Show,
+    [string[]]$Product
 )
 
 Set-StrictMode -Version 2.0
@@ -188,7 +197,12 @@ function Resolve-ProductToken {
     }
 
     if (Test-LooksLikeToken -Value $envVar) {
-        $result.Error = 'The value of "tokenEnvVar" looks like the token itself. That field takes the NAME of an environment variable (for example ME_ADAUDIT_TOKEN); put the token in that variable, or move it into the "token" field instead.'
+        # The value is not a variable name and no such variable exists, so it is almost
+        # certainly the token pasted into the wrong field. Use it rather than failing over
+        # a naming detail, but say so - the token now sits in the config file on disk.
+        Write-Warning ('"tokenEnvVar" holds what looks like the token itself, so it is being used as the token. That field is meant for the NAME of an environment variable; to silence this, rename the field to "token", or set $env:<NAME> and put <NAME> here instead.')
+        $result.Token = $envVar
+        return $result
     }
     else {
         $result.Error = "Environment variable '$envVar' is not set. Set it to the API token of this product, for example: `$env:$envVar = '<token>'"
@@ -719,8 +733,43 @@ if (-not [System.IO.Path]::IsPathRooted($outFile)) {
     $outFile = Join-Path (Get-ScriptDirectory) $outFile
 }
 
-$results = New-Object System.Collections.ArrayList
+# Narrow the product list before checking anything: not every product in the config is
+# necessarily installed, and querying one that is not just produces noise in the report.
+$selected = New-Object System.Collections.ArrayList
+$skipped  = New-Object System.Collections.ArrayList
 foreach ($product in $config.products) {
+    $productName = [string](Get-ConfigValue -Object $product -Name 'name' -Default 'Unknown product')
+
+    # "enabled": false marks a product as not installed here. Absent means enabled.
+    $isEnabled = Get-ConfigValue -Object $product -Name 'enabled' -Default $true
+    if (-not [bool]$isEnabled) {
+        [void]$skipped.Add("$productName (disabled in config)")
+        continue
+    }
+
+    if ($Product -and @($Product).Count -gt 0) {
+        $matched = $false
+        foreach ($wanted in $Product) {
+            if ($productName -like "*$wanted*") { $matched = $true; break }
+        }
+        if (-not $matched) {
+            [void]$skipped.Add("$productName (not selected by -Product)")
+            continue
+        }
+    }
+
+    [void]$selected.Add($product)
+}
+
+if ($skipped.Count -gt 0) {
+    Write-Host ("Skipping: {0}" -f ($skipped -join ', ')) -ForegroundColor DarkGray
+}
+if ($selected.Count -eq 0) {
+    throw 'No products left to check. Every product is either disabled in the config or excluded by -Product.'
+}
+
+$results = New-Object System.Collections.ArrayList
+foreach ($product in $selected) {
     $productName = [string](Get-ConfigValue -Object $product -Name 'name' -Default 'Unknown product')
     Write-Host "Checking $productName ..."
     $record = Test-MeProduct -Product $product -TimeoutSec $timeout
