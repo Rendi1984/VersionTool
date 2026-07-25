@@ -57,7 +57,7 @@ $ErrorActionPreference = 'Stop'
 
 # Keep in step with the VERSION file. Printed at startup and in the HTML report so the
 # running copy identifies itself even if the file was renamed or copied elsewhere.
-$script:ToolVersion = '1.2.2'
+$script:ToolVersion = '1.2.3'
 
 # ---------------------------------------------------------------------------
 # TLS / certificate handling
@@ -786,20 +786,25 @@ if (-not [System.IO.Path]::IsPathRooted($outFile)) {
 # necessarily installed, and querying one that is not just produces noise in the report.
 $selected = New-Object System.Collections.ArrayList
 $skipped  = New-Object System.Collections.ArrayList
-foreach ($product in $config.products) {
-    $productName = [string](Get-ConfigValue -Object $product -Name 'name' -Default 'Unknown product')
+# NOTE: the loop variable must not be called $product - PowerShell variable names are
+# case-insensitive, so it would overwrite the -Product parameter on the first iteration
+# and the filter below would then compare against a product object instead of a name.
+$wantedNames = @($Product)
+
+foreach ($productEntry in $config.products) {
+    $productName = [string](Get-ConfigValue -Object $productEntry -Name 'name' -Default 'Unknown product')
 
     # "enabled": false marks a product as not installed here. Absent means enabled.
-    $isEnabled = Get-ConfigValue -Object $product -Name 'enabled' -Default $true
+    $isEnabled = Get-ConfigValue -Object $productEntry -Name 'enabled' -Default $true
     if (-not [bool]$isEnabled) {
         [void]$skipped.Add("$productName (disabled in config)")
         continue
     }
 
-    if ($Product -and @($Product).Count -gt 0) {
+    if ($wantedNames.Count -gt 0) {
         $matched = $false
-        foreach ($wanted in $Product) {
-            if ($productName -like "*$wanted*") { $matched = $true; break }
+        foreach ($wanted in $wantedNames) {
+            if ($productName -like ('*' + [string]$wanted + '*')) { $matched = $true; break }
         }
         if (-not $matched) {
             [void]$skipped.Add("$productName (not selected by -Product)")
@@ -807,7 +812,7 @@ foreach ($product in $config.products) {
         }
     }
 
-    [void]$selected.Add($product)
+    [void]$selected.Add($productEntry)
 }
 
 if ($skipped.Count -gt 0) {
@@ -818,10 +823,10 @@ if ($selected.Count -eq 0) {
 }
 
 $results = New-Object System.Collections.ArrayList
-foreach ($product in $selected) {
-    $productName = [string](Get-ConfigValue -Object $product -Name 'name' -Default 'Unknown product')
+foreach ($productEntry in $selected) {
+    $productName = [string](Get-ConfigValue -Object $productEntry -Name 'name' -Default 'Unknown product')
     Write-Host "Checking $productName ..."
-    $record = Test-MeProduct -Product $product -TimeoutSec $timeout
+    $record = Test-MeProduct -Product $productEntry -TimeoutSec $timeout
     [void]$results.Add($record)
 
     if ($record.Reachable) {
