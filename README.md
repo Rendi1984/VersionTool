@@ -30,7 +30,14 @@ Products covered by the sample config:
    | `baseUrl` | Scheme, host and web port of the product (e.g. `https://adaudit.corp.local:8081`) |
    | `tokenEnvVar` | Name of the environment variable holding that product's token |
    | `endpoints` | API paths to try, in order; the first one that returns a version wins |
-   | `latestVersion` / `latestBuild` | The reference values the installed version is compared against |
+   | `latestVersion` / `latestBuild` | Reference values to compare against - **optional**, see below |
+
+   `latestVersion` / `latestBuild` ship empty. Leave them empty and the report simply states
+   the installed version ("Installed (no reference set)"); fill them in from the product's
+   release-notes page and the report gains an up-to-date / update-available status. They are
+   *not* the installed version - the script reads that from the API. Nothing here is
+   auto-updated, so a stale reference produces a wrong status; that is why empty is the
+   default rather than a guessed number.
 
    The token itself is never written in the config - `tokenEnvVar` only holds the *name*
    of the environment variable that carries it. See step 2.

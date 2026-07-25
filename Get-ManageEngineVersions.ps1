@@ -369,13 +369,16 @@ function ConvertTo-ComparableVersion {
 
 function Get-VersionStatus {
     <#
-        Returns: UpToDate | Outdated | Ahead | Unknown
+        Returns: UpToDate | Outdated | Ahead | NoReference | Unknown
+
+        NoReference means the installed version was read successfully but the config
+        carries no value to compare it against. That is a normal, honest outcome -
+        better than inventing a reference version and reporting a false status.
     #>
     param([string]$Installed, [string]$Latest)
 
-    if ([string]::IsNullOrWhiteSpace($Installed) -or [string]::IsNullOrWhiteSpace($Latest)) {
-        return 'Unknown'
-    }
+    if ([string]::IsNullOrWhiteSpace($Installed)) { return 'Unknown' }
+    if ([string]::IsNullOrWhiteSpace($Latest))    { return 'NoReference' }
 
     $a = ConvertTo-ComparableVersion -Text $Installed
     $b = ConvertTo-ComparableVersion -Text $Latest
@@ -501,10 +504,11 @@ function Get-StatusLabel {
     param([string]$Status)
 
     switch ($Status) {
-        'UpToDate' { return 'Up to date' }
-        'Outdated' { return 'Update available' }
-        'Ahead'    { return 'Newer than reference' }
-        default    { return 'Unknown' }
+        'UpToDate'    { return 'Up to date' }
+        'Outdated'    { return 'Update available' }
+        'Ahead'       { return 'Newer than reference' }
+        'NoReference' { return 'Installed (no reference set)' }
+        default       { return 'Unknown' }
     }
 }
 
@@ -529,10 +533,11 @@ function New-MeHtmlReport {
             $statusClass = 'error'
         } else {
             switch ($r.Status) {
-                'UpToDate' { $statusClass = 'ok' }
-                'Outdated' { $statusClass = 'warn' }
-                'Ahead'    { $statusClass = 'info' }
-                default    { $statusClass = 'unknown' }
+                'UpToDate'    { $statusClass = 'ok' }
+                'Outdated'    { $statusClass = 'warn' }
+                'Ahead'       { $statusClass = 'info' }
+                'NoReference' { $statusClass = 'info' }
+                default       { $statusClass = 'unknown' }
             }
         }
 

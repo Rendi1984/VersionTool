@@ -9,6 +9,11 @@
     "  is gitignored - never commit it.",
     "Set 'baseUrl' of every product to your real server, or delete the products you do",
     "  not use - a leftover placeholder host just reports as unreachable.",
+    "'latestVersion' and 'latestBuild' ship EMPTY on purpose: they are the reference you",
+    "  compare against, and only you know which release your organisation treats as",
+    "  current. Leave them empty to just report the installed version, or fill them in",
+    "  from the product's release-notes page to get an up-to-date / update-available",
+    "  status. Find the installed values under Help > About in the product console.",
     "Lines starting with _ are ignored by the script."
   ],
   "reportTitle": "ManageEngine Version Report",
@@ -25,8 +30,8 @@
         "/api/json/admin/getProductDetails",
         "/api/json/settings/serverinfo"
       ],
-      "latestVersion": "8.2.0",
-      "latestBuild": "8200"
+      "latestVersion": "",
+      "latestBuild": ""
     },
     {
       "name": "ADSelfService Plus",
@@ -37,8 +42,8 @@
         "/api/json/aboutproduct",
         "/RestAPI/WC/ProductDetails"
       ],
-      "latestVersion": "6.2",
-      "latestBuild": "6403"
+      "latestVersion": "",
+      "latestBuild": ""
     },
     {
       "name": "Key Manager Plus",
@@ -49,8 +54,8 @@
         "/restapi/json/v1/serverinfo",
         "/api/pam/v1/serverinfo"
       ],
-      "latestVersion": "6.9",
-      "latestBuild": "6900"
+      "latestVersion": "",
+      "latestBuild": ""
     }
   ]
 }
