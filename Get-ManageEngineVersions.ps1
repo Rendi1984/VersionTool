@@ -132,7 +132,50 @@ function Import-MeConfig {
     }
 
     $raw = Get-Content -LiteralPath $Path -Raw -Encoding UTF8
-    $cfg = $raw | ConvertFrom-Json
+
+    # Get-Content -Raw yields one string, but return $null for an empty file and an array
+    # if -Raw is ever lost. Normalise, because ConvertFrom-Json on an array parses each
+    # element as its own document and reports a confusing error on the first line.
+    if ($null -eq $raw) {
+        throw "Config file $Path is empty. Delete it and run the script again to recreate it from config.sample.json."
+    }
+    if ($raw -is [array]) { $raw = $raw -join "`r`n" }
+    $raw = [string]$raw
+
+    # Strip a UTF-8 BOM: Notepad writes one when saving as UTF-8, and ConvertFrom-Json
+    # treats it as a stray character before the opening brace.
+    if ($raw.Length -gt 0 -and $raw[0] -eq [char]0xFEFF) { $raw = $raw.Substring(1) }
+    $raw = $raw.Trim()
+
+    if ($raw.Length -eq 0) {
+        throw "Config file $Path contains no text. Delete it and run the script again to recreate it."
+    }
+
+    try {
+        $cfg = ConvertFrom-Json -InputObject $raw
+    }
+    catch {
+        # ConvertFrom-Json only names the offending token ("Invalid JSON primitive: https"),
+        # never where it is. Find the line so the file can actually be fixed.
+        $detail = $_.Exception.Message
+        $hint   = ''
+
+        $token = $null
+        if ($detail -match 'Invalid JSON primitive:\s*(.+?)\.?\s*$') { $token = $Matches[1].Trim() }
+
+        if ($token) {
+            $lines = $raw -split "`r?`n"
+            for ($i = 0; $i -lt $lines.Length; $i++) {
+                if ($lines[$i] -match [regex]::Escape($token)) {
+                    $hint = "`r`n  First line mentioning '$token' is line $($i + 1):`r`n    $($lines[$i].Trim())"
+                    break
+                }
+            }
+            $hint += "`r`n  A value like this must be inside double quotes, and every entry except the last needs a trailing comma."
+        }
+
+        throw "Config file $Path is not valid JSON: $detail$hint`r`n  Fix it, or delete it and run the script again to recreate it from config.sample.json."
+    }
 
     if (-not (Get-Member -InputObject $cfg -Name 'products' -MemberType NoteProperty)) {
         throw "Config file $Path has no 'products' array."

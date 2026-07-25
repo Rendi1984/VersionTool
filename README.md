@@ -147,6 +147,29 @@ The name in `tokenEnvVar` is right, but the variable is empty in this window. Va
 [Environment]::SetEnvironmentVariable('ME_KMP_TOKEN','<token>','User')
 ```
 
+**`ConvertFrom-Json : Invalid JSON primitive: https`**
+
+`config.json` is not valid JSON - usually a URL that lost its surrounding quotes, or a missing
+or extra comma after an edit in Notepad. The script names the offending line; fix it, or delete
+`config.json` and run the script again to get a fresh copy.
+
+A correct product entry looks exactly like this - every value in double quotes, a comma after
+every entry except the last one in its block:
+
+```json
+{
+  "name": "Key Manager Plus",
+  "enabled": true,
+  "baseUrl": "https://kmp.lab.local:6565",
+  "tokenEnvVar": "ME_KMP_TOKEN",
+  "endpoints": [
+    "/api/json/aboutproduct"
+  ],
+  "latestVersion": "",
+  "latestBuild": ""
+}
+```
+
 **A product reports as unreachable**
 
 `config.sample.json` ships placeholder hosts (`adaudit.corp.local`, `adssp.corp.local`). Point
