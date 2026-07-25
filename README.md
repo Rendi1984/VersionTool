@@ -13,12 +13,14 @@ Products covered by the sample config:
 
 ## Setup
 
-1. Copy the sample config and edit it:
+1. Run the script once. It creates `config.json` from `config.sample.json`, opens it in
+   Notepad and stops so you can fill it in:
 
    ```powershell
-   Copy-Item .\config.sample.json .\config.json
-   notepad .\config.json
+   powershell.exe -ExecutionPolicy Bypass -File .\Get-ManageEngineVersions.ps1
    ```
+
+   (Doing it by hand works too: `Copy-Item .\config.sample.json .\config.json`.)
 
    Per product there are only five fields to set:
 
@@ -80,16 +82,11 @@ The script also emits the results as objects on the pipeline, so it can be piped
 
 ## Troubleshooting
 
-**`Config file not found: ...\config.json`**
+**"Config was just created and still holds placeholder values"**
 
-The script reads `config.json`, which does not ship - `config.sample.json` is the template.
-Create your copy first, in the same folder as the script:
-
-```powershell
-cd C:\Temp\VersionTool
-Copy-Item .\config.sample.json .\config.json
-notepad .\config.json
-```
+Expected on the very first run: the script created `config.json` for you from the template and
+opened it in Notepad. Edit it (real `baseUrl` per product, or delete the products you do not
+use), set your tokens, then run the script again.
 
 **`The value of "tokenEnvVar" looks like the token itself`**
 

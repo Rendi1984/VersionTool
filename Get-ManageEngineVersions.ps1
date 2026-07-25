@@ -90,11 +90,36 @@ function Import-MeConfig {
         $Path = Join-Path (Get-ScriptDirectory) 'config.json'
     }
     if (-not (Test-Path -LiteralPath $Path)) {
+        # First run: create config.json from the shipped template rather than making
+        # the user do it by hand, then stop so the placeholder values get edited.
         $sample = Join-Path (Get-ScriptDirectory) 'config.sample.json'
-        if (Test-Path -LiteralPath $sample) {
-            throw "Config file not found: $Path. Create it by running:  Copy-Item '$sample' '$Path'   and then edit it."
+        if (-not (Test-Path -LiteralPath $sample)) {
+            throw "Config file not found: $Path (and no config.sample.json next to the script to create it from)."
         }
-        throw "Config file not found: $Path"
+
+        try {
+            Copy-Item -LiteralPath $sample -Destination $Path -ErrorAction Stop
+        }
+        catch {
+            throw "Config file not found: $Path, and creating it from config.sample.json failed: $($_.Exception.Message)"
+        }
+
+        Write-Host ''
+        Write-Host "Created $Path from config.sample.json." -ForegroundColor Green
+        Write-Host ''
+        Write-Host 'Before running again, edit that file and:' -ForegroundColor Yellow
+        Write-Host '  1. set "baseUrl" of each product to your real server (the defaults are placeholders),'
+        Write-Host '     or delete the products you do not use;'
+        Write-Host '  2. supply each token by setting the environment variable named in "tokenEnvVar",'
+        Write-Host '     for example:  $env:ME_KMP_TOKEN = ''<token>''      (do NOT paste the token into'
+        Write-Host '     "tokenEnvVar" itself - that field holds the variable NAME).'
+        Write-Host ''
+        Write-Host "Opening $Path ..." -ForegroundColor Green
+
+        try { Start-Process -FilePath 'notepad.exe' -ArgumentList $Path -ErrorAction Stop }
+        catch { Write-Host "Could not open an editor automatically - edit $Path yourself." }
+
+        throw 'Config was just created and still holds placeholder values. Edit it, then run this script again.'
     }
 
     $raw = Get-Content -LiteralPath $Path -Raw -Encoding UTF8
