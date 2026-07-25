@@ -23,6 +23,8 @@ Whenever files are produced for the user, all three of these are required - no e
    The ZIP holds **only what is needed to run the tool** - today that is
    `Get-ManageEngineVersions.ps1` and `config.sample.json`. No documentation, no project files.
    Never include `config.json`: it can hold real tokens.
+   Put the files at the **root of the archive, with no wrapper folder** - extracting already
+   creates a folder, so a prefix directory just nests one inside another.
 2. **Provide a download link** - send the ZIP with `SendUserFile`, and also link the files on the
    pushed branch in GitHub.
 3. **Write run instructions** - the exact command to launch the tool, its parameters/switches, and
