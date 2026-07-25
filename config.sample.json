@@ -1,0 +1,59 @@
+{
+  "reportTitle": "ManageEngine Version Report",
+  "outputPath": "ManageEngine-Versions.html",
+  "timeoutSec": 30,
+  "skipCertificateCheck": true,
+  "products": [
+    {
+      "name": "ADAudit Plus",
+      "key": "adauditplus",
+      "baseUrl": "https://adaudit.corp.local:8081",
+      "authMode": "header",
+      "authHeaderName": "AUTHTOKEN",
+      "authQueryName": "AUTHTOKEN",
+      "tokenEnvVar": "ME_ADAUDIT_TOKEN",
+      "token": "",
+      "endpoints": [
+        "/api/json/aboutproduct",
+        "/api/json/admin/getProductDetails",
+        "/api/json/settings/serverinfo"
+      ],
+      "latestVersion": "8.2.0",
+      "latestBuild": "8200"
+    },
+    {
+      "name": "ADSelfService Plus",
+      "key": "adselfserviceplus",
+      "baseUrl": "https://adssp.corp.local:8888",
+      "authMode": "header",
+      "authHeaderName": "authtoken",
+      "authQueryName": "AUTHTOKEN",
+      "tokenEnvVar": "ME_ADSSP_TOKEN",
+      "token": "",
+      "endpoints": [
+        "/RestAPI/BuildDetails",
+        "/api/json/aboutproduct",
+        "/RestAPI/WC/ProductDetails"
+      ],
+      "latestVersion": "6.2",
+      "latestBuild": "6403"
+    },
+    {
+      "name": "Key Manager Plus",
+      "key": "keymanagerplus",
+      "baseUrl": "https://kmp.corp.local:7272",
+      "authMode": "header",
+      "authHeaderName": "AUTHTOKEN",
+      "authQueryName": "AUTHTOKEN",
+      "tokenEnvVar": "ME_KMP_TOKEN",
+      "token": "",
+      "endpoints": [
+        "/api/json/aboutproduct",
+        "/restapi/json/v1/serverinfo",
+        "/api/pam/v1/serverinfo"
+      ],
+      "latestVersion": "6.9",
+      "latestBuild": "6900"
+    }
+  ]
+}
