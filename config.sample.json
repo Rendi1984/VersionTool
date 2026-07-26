@@ -33,15 +33,18 @@
     {
       "name": "Key Manager Plus",
       "enabled": true,
-      "baseUrl": "https://kmp.corp.local:7272",
+      "baseUrl": "https://kmp.corp.local:6565",
       "tokenEnvVar": "ME_KMP_TOKEN",
       "endpoints": [
+        "/api/pki/restapi/getServerInfo",
+        "/api/pki/restapi/aboutProduct",
+        "/api/pki/restapi/getProductDetails",
         "/api/json/aboutproduct",
-        "/restapi/json/v1/serverinfo",
-        "/api/pam/v1/serverinfo"
+        "/restapi/json/v1/serverinfo"
       ],
       "latestVersion": "",
-      "latestBuild": ""
+      "latestBuild": "",
+      "authMode": "path"
     }
   ]
 }

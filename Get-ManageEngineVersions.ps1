@@ -57,7 +57,7 @@ $ErrorActionPreference = 'Stop'
 
 # Keep in step with the VERSION file. Printed at startup and in the HTML report so the
 # running copy identifies itself even if the file was renamed or copied elsewhere.
-$script:ToolVersion = '1.2.3'
+$script:ToolVersion = '1.3.0'
 
 # ---------------------------------------------------------------------------
 # TLS / certificate handling
@@ -296,7 +296,13 @@ function Invoke-MeApi {
     $headers = @{ 'Accept' = 'application/json' }
 
     if ($Token) {
-        if ($AuthMode -eq 'query') {
+        if ($AuthMode -eq 'path') {
+            # Key Manager Plus documents the token as a path segment:
+            #   https://host:6565/api/pki/restapi/<api_name>/AUTHTOKEN=<token>
+            $pName = $AuthQueryName
+            if ([string]::IsNullOrWhiteSpace($pName)) { $pName = 'AUTHTOKEN' }
+            $requestUrl = $requestUrl.TrimEnd('/') + '/' + $pName + '=' + $Token
+        } elseif ($AuthMode -eq 'query') {
             $qName = $AuthQueryName
             if ([string]::IsNullOrWhiteSpace($qName)) { $qName = 'AUTHTOKEN' }
             $requestUrl = Add-QueryParameter -Url $requestUrl -Name $qName -Value $Token
@@ -358,6 +364,15 @@ $script:VersionKeys = @(
 $script:BuildKeys = @(
     'build_number', 'buildnumber', 'build', 'buildno', 'build_no',
     'product_build', 'ppmbuild'
+)
+# The About dialog also shows an agent version and a licence type. Both are useful on their
+# own - a Trial that is about to lapse matters as much as a pending update.
+$script:AgentVersionKeys = @(
+    'agent_version', 'agentversion', 'agent_ver'
+)
+$script:LicenseTypeKeys = @(
+    'license_type', 'licensetype', 'license', 'licence_type', 'licencetype',
+    'licenseedition', 'edition'
 )
 
 function Find-JsonValue {
@@ -468,6 +483,8 @@ function Test-MeProduct {
         Reachable        = $false
         InstalledVersion = $null
         InstalledBuild   = $null
+        AgentVersion     = $null
+        LicenseType      = $null
         LatestVersion    = [string](Get-ConfigValue -Object $Product -Name 'latestVersion' -Default '')
         LatestBuild      = [string](Get-ConfigValue -Object $Product -Name 'latestBuild'   -Default '')
         Status           = 'Unknown'
@@ -527,6 +544,8 @@ function Test-MeProduct {
         $record.Reachable        = $true
         $record.InstalledVersion = $version
         $record.InstalledBuild   = $build
+        $record.AgentVersion     = Find-JsonValue -Node $call.Data -Names $script:AgentVersionKeys
+        $record.LicenseType      = Find-JsonValue -Node $call.Data -Names $script:LicenseTypeKeys
         $record.EndpointUsed     = [string]$endpoint
         break
     }
@@ -613,6 +632,8 @@ function New-MeHtmlReport {
         if ([string]::IsNullOrWhiteSpace($latest)) { $latest = '-' }
         $latestBuild = $r.LatestBuild
         if ([string]::IsNullOrWhiteSpace($latestBuild)) { $latestBuild = '-' }
+        $licenseType = $r.LicenseType
+        if ([string]::IsNullOrWhiteSpace($licenseType)) { $licenseType = '-' }
 
         $detail = $r.EndpointUsed
         if (-not $r.Reachable) { $detail = $r.Error }
@@ -623,6 +644,7 @@ function New-MeHtmlReport {
         <td class="product">$(ConvertTo-HtmlText $r.Name)<span class="url">$(ConvertTo-HtmlText $r.BaseUrl)</span></td>
         <td>$(ConvertTo-HtmlText $installed)</td>
         <td>$(ConvertTo-HtmlText $installedBuild)</td>
+        <td>$(ConvertTo-HtmlText $licenseType)</td>
         <td>$(ConvertTo-HtmlText $latest)</td>
         <td>$(ConvertTo-HtmlText $latestBuild)</td>
         <td><span class="badge $statusClass">$(ConvertTo-HtmlText $statusText)</span></td>
@@ -734,6 +756,7 @@ function New-MeHtmlReport {
           <th>Product</th>
           <th>Installed version</th>
           <th>Installed build</th>
+          <th>Licence</th>
           <th>Reference version</th>
           <th>Reference build</th>
           <th>Status</th>
@@ -832,6 +855,9 @@ foreach ($productEntry in $selected) {
     if ($record.Reachable) {
         Write-Host ("  version {0} (build {1}) - {2}" -f `
             $record.InstalledVersion, $record.InstalledBuild, (Get-StatusLabel -Status $record.Status))
+        if ($record.LicenseType)  { Write-Host ("  licence: {0}"       -f $record.LicenseType) }
+        if ($record.AgentVersion) { Write-Host ("  agent version: {0}" -f $record.AgentVersion) }
+        Write-Verbose ("  endpoint: {0}" -f $record.EndpointUsed)
     } else {
         # Name the product: Write-Warning prefixes "WARNING:" and PowerShell may wrap the
         # line, which visually detaches it from the "Checking <name> ..." line above.

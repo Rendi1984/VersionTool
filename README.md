@@ -48,8 +48,9 @@ Products covered by the sample config:
    <details>
    <summary>Optional fields (defaults are correct for all three products - only add these if a product rejects the token)</summary>
 
-   - `authMode` - `header` (default) or `query`: send the token as an HTTP header or as a
-     URL parameter
+   - `authMode` - `header` (default), `query` or `path`: send the token as an HTTP header,
+     as a URL parameter, or as a trailing path segment. Key Manager Plus documents the
+     last form: `https://host:6565/api/pki/restapi/<api_name>/AUTHTOKEN=<token>`
    - `authHeaderName` - name of the header, default `AUTHTOKEN` (used when `authMode` is `header`)
    - `authQueryName` - name of the URL parameter, default `AUTHTOKEN` (used when `authMode` is `query`)
    - `token` - the token inline instead of via environment variable. Works, but stores a
@@ -74,11 +75,11 @@ Products covered by the sample config:
 ## Run
 
 Inside the distributed ZIP the script carries its version in the filename
-(`Get-ManageEngineVersions-v1.2.3.ps1`) so it is clear which build is being run; in this
+(`Get-ManageEngineVersions-v1.3.0.ps1`) so it is clear which build is being run; in this
 repository it keeps the plain name. Either way it prints its version on startup:
 
 ```
-VersionTool v1.2.3 - Get-ManageEngineVersions-v1.2.3.ps1
+VersionTool v1.3.0 - Get-ManageEngineVersions-v1.3.0.ps1
 ```
 
 ```powershell
@@ -231,6 +232,31 @@ Reading the result:
 `config.sample.json` ships placeholder hosts (`adaudit.corp.local`, `adssp.corp.local`). Point
 `baseUrl` at your real servers, or delete the products you do not use - otherwise every run
 reports them as unreachable. Run with `-Verbose` to see each endpoint being tried.
+
+## Product API notes
+
+**Key Manager Plus.** Per the [RESTful API documentation](https://www.manageengine.com/key-manager/help/restapi.html)
+the base path is `/api/pki/restapi/<api_name>` on port **6565**, and the token is passed as a
+trailing path segment (`authMode: "path"`), for example:
+
+```
+https://kmp.lab.local:6565/api/pki/restapi/getAllSSLCertificates/AUTHTOKEN=<token>
+```
+
+The documented calls cover certificate and key operations; **no version/about API is
+documented**. The About dialog in the web console may therefore be served by an internal UI
+call rather than the public REST API. If none of the configured endpoints return a version,
+capture the real request:
+
+1. Open the product console, press **F12**, select the **Network** tab.
+2. Open **Help > About** (or Settings, where the About dialog appears).
+3. Find the request that fires as the dialog opens, right-click it and choose
+   **Copy > Copy as cURL**, or note its URL.
+4. Add that path to `endpoints` for the product.
+
+If the captured request authenticates with a session cookie rather than `AUTHTOKEN`, it cannot
+be reached with a token alone - in that case the version has to come from somewhere else
+(installed-product registry keys, or the ManageEngine console itself).
 
 ## Notes
 
