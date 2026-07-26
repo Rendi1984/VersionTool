@@ -178,6 +178,54 @@ every entry except the last one in its block:
 }
 ```
 
+**Testing the API by hand**
+
+To check whether the product answers at all, independently of this script, call it directly.
+Windows PowerShell 5.1 has no `-SkipCertificateCheck`, so the certificate callback is set first
+(ManageEngine ships self-signed certificates):
+
+```powershell
+[Net.ServicePointManager]::ServerCertificateValidationCallback={$true}
+Invoke-RestMethod -Uri "https://localhost:6565/api/json/aboutproduct" -Headers @{AUTHTOKEN="<token>"} | ConvertTo-Json -Depth 6
+```
+
+Since the working path is exactly what is unknown, this tries every candidate, as a header and
+as a query parameter, and prints whichever answers:
+
+```powershell
+$token = "<token>"
+$base  = "https://localhost:6565"
+
+[Net.ServicePointManager]::ServerCertificateValidationCallback = {$true}
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.ServicePointManager]::SecurityProtocol
+
+foreach ($p in @("/api/json/aboutproduct","/restapi/json/v1/serverinfo","/api/pam/v1/serverinfo")) {
+    foreach ($mode in @('header','query')) {
+        $target = $base + $p; $headers = @{}
+        if ($mode -eq 'header') { $headers = @{ AUTHTOKEN = $token } } else { $target += "?AUTHTOKEN=$token" }
+        try {
+            $r = Invoke-RestMethod -Uri $target -Headers $headers -TimeoutSec 15 -ErrorAction Stop
+            Write-Host "OK   $mode $p" -ForegroundColor Green
+            $r | ConvertTo-Json -Depth 6
+        } catch {
+            $code = ''
+            if ($_.Exception.Response) { $code = [int]$_.Exception.Response.StatusCode }
+            Write-Host "FAIL $mode $p  $code" -ForegroundColor DarkGray
+        }
+    }
+}
+```
+
+Reading the result:
+
+| What you see | What it means |
+|---|---|
+| `OK` plus JSON containing a version | That path works - put it first in `endpoints` |
+| `401` / `403` on every path | Token or licence problem, not the path. REST API access may be restricted on a Free licence |
+| `404` on every path | Wrong paths for this build - check the product's API documentation |
+| Connection refused / timeout | Wrong host or port, or a firewall in between |
+| `query` works but `header` does not | Set `"authMode": "query"` for that product |
+
 **A product reports as unreachable**
 
 `config.sample.json` ships placeholder hosts (`adaudit.corp.local`, `adssp.corp.local`). Point
