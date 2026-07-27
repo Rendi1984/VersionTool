@@ -68,7 +68,7 @@ $ErrorActionPreference = 'Stop'
 
 # Keep in step with the VERSION file. Printed at startup and in the HTML report so the
 # running copy identifies itself even if the file was renamed or copied elsewhere.
-$script:ToolVersion = '1.4.0'
+$script:ToolVersion = '1.4.1'
 
 # ---------------------------------------------------------------------------
 # TLS / certificate handling
@@ -510,22 +510,42 @@ function Get-ProductConfPath {
         Write-Verbose "[$Name] no product.conf under installPath: $installPath"
     }
 
-    # Conventional locations. The folder is usually the product name as displayed.
+    # Conventional locations. The installer does not use the display name verbatim -
+    # "Key Manager Plus" installs into ...\ManageEngine\KeyManager - so compare on a
+    # normalised form (lowercase, no spaces, no trailing "plus") instead of guessing
+    # a fixed list of spellings.
     $roots = @(
         'C:\ManageEngine',
         'C:\Program Files\ManageEngine',
         'C:\Program Files (x86)\ManageEngine',
         'D:\ManageEngine',
+        'D:\Program Files\ManageEngine',
         'E:\ManageEngine'
     )
-    $folderNames = @($Name, ($Name -replace '\s+', ''), ($Name -replace '\s*Plus$', ''))
+
+    $normalise = {
+        param([string]$Text)
+        $t = ([string]$Text).ToLower()
+        $t = $t -replace '[^a-z0-9]', ''
+        $t = $t -replace 'plus$', ''
+        return $t
+    }
+    $wanted = & $normalise $Name
 
     foreach ($root in $roots) {
         if (-not (Test-Path -LiteralPath $root)) { continue }
-        foreach ($folder in $folderNames) {
-            if ([string]::IsNullOrWhiteSpace($folder)) { continue }
-            $candidate = Join-Path $root (Join-Path $folder 'conf\product.conf')
-            if (Test-Path -LiteralPath $candidate) { return $candidate }
+
+        try { $subDirs = Get-ChildItem -LiteralPath $root -Directory -ErrorAction Stop }
+        catch { continue }
+
+        foreach ($dir in $subDirs) {
+            $candidate = Join-Path $dir.FullName 'conf\product.conf'
+            if (-not (Test-Path -LiteralPath $candidate)) { continue }
+
+            $folderKey = & $normalise $dir.Name
+            if ($folderKey -eq $wanted -or $folderKey -like "*$wanted*" -or $wanted -like "*$folderKey*") {
+                return $candidate
+            }
         }
     }
 
@@ -548,6 +568,46 @@ function Get-ProductConfPath {
     }
 
     return $null
+}
+
+function Find-HighestBuildConf {
+    <#
+        A service pack does not always rewrite product.conf - an install can report
+        build 7120 there while the console shows 7130. Scan the conf folder for any
+        other file carrying a build number and return the highest one found, so an
+        applied patch is not missed.
+
+        Returns a PSCustomObject with Build, Version and Path, or $null.
+    #>
+    param([string]$ConfFolder)
+
+    if (-not (Test-Path -LiteralPath $ConfFolder)) { return $null }
+
+    try {
+        $files = Get-ChildItem -LiteralPath $ConfFolder -Filter '*.conf' -File -ErrorAction Stop
+    }
+    catch { return $null }
+
+    $best = $null
+
+    foreach ($file in $files) {
+        $parsed = Read-ProductConf -Path $file.FullName
+        if (-not $parsed -or -not $parsed.Build) { continue }
+
+        $buildNumber = 0
+        if (-not [int]::TryParse(([string]$parsed.Build).Trim(), [ref]$buildNumber)) { continue }
+
+        if ($null -eq $best -or $buildNumber -gt $best.BuildNumber) {
+            $best = [pscustomobject]@{
+                Build       = $parsed.Build
+                BuildNumber = $buildNumber
+                Version     = $parsed.Version
+                Path        = $file.FullName
+            }
+        }
+    }
+
+    return $best
 }
 
 function Read-ProductConf {
@@ -643,6 +703,19 @@ function Test-MeProduct {
                 $record.Architecture     = $conf.Architecture
                 $record.Source           = "product.conf ($confPath)"
                 $record.EndpointUsed     = $confPath
+
+                # Prefer a higher build recorded by a service pack elsewhere in conf\.
+                $higher = Find-HighestBuildConf -ConfFolder (Split-Path -Parent $confPath)
+                if ($higher) {
+                    $current = 0
+                    [void][int]::TryParse(([string]$conf.Build).Trim(), [ref]$current)
+                    if ($higher.BuildNumber -gt $current) {
+                        Write-Verbose "[$name] $($higher.Path) reports build $($higher.Build), higher than product.conf ($($conf.Build))"
+                        $record.InstalledBuild = $higher.Build
+                        if ($higher.Version) { $record.InstalledVersion = $higher.Version }
+                        $record.Source = "$(Split-Path -Leaf $higher.Path) ($($higher.Path))"
+                    }
+                }
 
                 # A build number without a version still identifies the release.
                 if (-not $record.InstalledVersion -and $record.InstalledBuild) {

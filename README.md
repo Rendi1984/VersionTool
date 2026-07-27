@@ -9,7 +9,7 @@ Two sources are used, in order:
 
 1. **`conf\product.conf`** in the product installation folder, where ManageEngine writes
    `product.build_number` and `product.processor_architecture`. This needs no token, no API
-   permission and no running web service, so it is tried first and is the most reliable route.
+   permission and no running web service, so it is tried first.
 2. **The REST API**, when no `product.conf` is found - for example when checking a remote
    server. This is where `baseUrl`, `endpoints` and the token come in.
 
@@ -84,11 +84,11 @@ Products covered by the sample config:
 ## Run
 
 Inside the distributed ZIP the script carries its version in the filename
-(`Get-ManageEngineVersions-v1.4.0.ps1`) so it is clear which build is being run; in this
+(`Get-ManageEngineVersions-v1.4.1.ps1`) so it is clear which build is being run; in this
 repository it keeps the plain name. Either way it prints its version on startup:
 
 ```
-VersionTool v1.4.0 - Get-ManageEngineVersions-v1.4.0.ps1
+VersionTool v1.4.1 - Get-ManageEngineVersions-v1.4.1.ps1
 ```
 
 ```powershell
@@ -243,6 +243,22 @@ Reading the result:
 `config.sample.json` ships placeholder hosts (`adaudit.corp.local`, `adssp.corp.local`). Point
 `baseUrl` at your real servers, or delete the products you do not use - otherwise every run
 reports them as unreachable. Run with `-Verbose` to see each endpoint being tried.
+
+## Caveat: product.conf can lag behind a service pack
+
+On a real Key Manager Plus install, `product.conf` reported build **7120** while the console's
+About dialog showed **7130** - the service pack had not rewritten the file. Take this into
+account before trusting the number:
+
+- The script scans the whole `conf` folder, not just `product.conf`, and uses the **highest**
+  build number it finds, naming the file it came from in the report's Source column.
+- If every file in `conf` is stale, the reported build is the base install rather than the
+  patched one. Cross-check with `-SkipLocal` (queries the API) or the About dialog when the
+  exact patch level matters, for example before applying a security update.
+
+The installation folder does not use the display name verbatim - Key Manager Plus installs into
+`...\ManageEngine\KeyManager`. The script normalises names when searching, but `installPath`
+is the reliable way to pin it down.
 
 ## Product API notes
 
