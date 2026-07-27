@@ -67,11 +67,11 @@ Any other ManageEngine product works too - add an entry with its name and instal
 ## Run
 
 Inside the distributed ZIP the script carries its version in the filename
-(`Get-ManageEngineVersions-v2.0.0.ps1`) so it is clear which build is being run; in this
+(`Get-ManageEngineVersions-v2.1.0.ps1`) so it is clear which build is being run; in this
 repository it keeps the plain name. Either way it prints its version on startup:
 
 ```
-VersionTool v2.0.0 - Get-ManageEngineVersions-v2.0.0.ps1
+VersionTool v2.1.0 - Get-ManageEngineVersions-v2.1.0.ps1
 ```
 
 ```powershell
@@ -86,11 +86,12 @@ Options:
 - `-Verbose` - log every path that is searched and every file that is read
 - `-Product <name>` - check only the named product(s); a partial name is enough, e.g.
   `-Product "Key Manager"`. Accepts several: `-Product "Key Manager","ADAudit"`
+- `-ConfigOnly` - report only the configured products, skipping the discovery scan
 
 Typical output:
 
 ```
-VersionTool v2.0.0 - Get-ManageEngineVersions-v2.0.0.ps1
+VersionTool v2.1.0 - Get-ManageEngineVersions-v2.1.0.ps1
 Skipping: ADAudit Plus (disabled in config)
 Checking Key Manager Plus ...
   version 7.1.2 (build 7120) - Installed (no reference set)
@@ -102,6 +103,19 @@ Report written to: C:\Temp\VersionTool\ManageEngine-Versions.html
 
 The results are also emitted as objects on the pipeline, so the script can be piped into
 `Export-Csv` or called from a larger monitoring script.
+
+## What the report covers
+
+By default the report is an inventory of the **machine**, not of the config file:
+
+1. Every product listed in `config.json` (unless disabled or excluded by `-Product`).
+2. Plus every other ManageEngine product found under the conventional install roots -
+   these appear marked *(discovered)* and carry no reference version, since the config
+   knows nothing about them.
+
+A product switched off with `"enabled": false` stays out of the report even if it is
+installed - that is the point of the flag. Use `-ConfigOnly` to turn discovery off entirely
+and report exactly the configured list.
 
 ## Checking only the products you have installed
 

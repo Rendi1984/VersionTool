@@ -36,6 +36,11 @@
     Check only the named product(s). Matches the "name" field, case-insensitively,
     and a partial name is enough.
 
+.PARAMETER ConfigOnly
+    Report only the products listed in the config. By default the script also scans the
+    ManageEngine install roots and includes anything else it finds, so the report is an
+    inventory of the machine rather than of the config file.
+
 .EXAMPLE
     powershell.exe -ExecutionPolicy Bypass -File .\Get-ManageEngineVersions.ps1 -Show
 
@@ -60,7 +65,8 @@ param(
     [string]$ConfigPath,
     [string]$OutputPath,
     [switch]$Show,
-    [string[]]$Product
+    [string[]]$Product,
+    [switch]$ConfigOnly
 )
 
 Set-StrictMode -Version 2.0
@@ -68,7 +74,7 @@ $ErrorActionPreference = 'Stop'
 
 # Keep in step with the VERSION file. Printed at startup and in the HTML report so the
 # running copy identifies itself even if the file was renamed or copied elsewhere.
-$script:ToolVersion = '2.0.0'
+$script:ToolVersion = '2.1.0'
 
 # ---------------------------------------------------------------------------
 # Config
@@ -269,14 +275,7 @@ function Get-ProductConfPath {
     # The installer does not use the display name verbatim - "Key Manager Plus"
     # installs into ...\ManageEngine\KeyManager - so compare on a normalised form
     # rather than guessing a fixed list of spellings.
-    $roots = @(
-        'C:\ManageEngine',
-        'C:\Program Files\ManageEngine',
-        'C:\Program Files (x86)\ManageEngine',
-        'D:\ManageEngine',
-        'D:\Program Files\ManageEngine',
-        'E:\ManageEngine'
-    )
+    $roots = Get-ManageEngineRoots
 
     $normalise = {
         param([string]$Text)
@@ -323,6 +322,52 @@ function Get-ProductConfPath {
     }
 
     return $null
+}
+
+function Get-ManageEngineRoots {
+    <#
+        The conventional installation roots. Kept in one place so discovery and the
+        per-product search agree on where to look.
+    #>
+    return @(
+        'C:\ManageEngine',
+        'C:\Program Files\ManageEngine',
+        'C:\Program Files (x86)\ManageEngine',
+        'D:\ManageEngine',
+        'D:\Program Files\ManageEngine',
+        'E:\ManageEngine'
+    )
+}
+
+function Find-AllProductConfs {
+    <#
+        Every conf\product.conf under the ManageEngine roots, so the report can cover
+        what is actually installed rather than only what someone remembered to configure.
+        Returns objects with FolderName and Path.
+    #>
+    $found = New-Object System.Collections.ArrayList
+
+    foreach ($root in (Get-ManageEngineRoots)) {
+        if (-not (Test-Path -LiteralPath $root)) { continue }
+
+        try { $subDirs = Get-ChildItem -LiteralPath $root -Directory -ErrorAction Stop }
+        catch {
+            Write-Verbose "Could not list ${root}: $($_.Exception.Message)"
+            continue
+        }
+
+        foreach ($dir in $subDirs) {
+            $candidate = Join-Path $dir.FullName 'conf\product.conf'
+            if (Test-Path -LiteralPath $candidate) {
+                [void]$found.Add([pscustomobject]@{
+                    FolderName = $dir.Name
+                    Path       = $candidate
+                })
+            }
+        }
+    }
+
+    return $found.ToArray()
 }
 
 function Read-ProductConf {
@@ -423,6 +468,7 @@ function Test-MeProduct {
 
     $record = [pscustomobject]@{
         Name             = $Name
+        InConfig         = $true
         Found            = $false
         InstalledVersion = $null
         InstalledBuild   = $null
@@ -513,6 +559,7 @@ function New-MeHtmlReport {
     $ok       = @($Results | Where-Object { $_.Status -eq 'UpToDate' }).Count
     $outdated = @($Results | Where-Object { $_.Status -eq 'Outdated' }).Count
     $missing  = @($Results | Where-Object { -not $_.Found }).Count
+    $installed = @($Results | Where-Object { $_.Found }).Count
 
     $rows = New-Object System.Collections.ArrayList
     foreach ($r in $Results) {
@@ -546,6 +593,7 @@ function New-MeHtmlReport {
 
         $subtitle = $r.ProductName
         if ([string]::IsNullOrWhiteSpace($subtitle)) { $subtitle = '' }
+        if (-not $r.InConfig) { $subtitle = "$subtitle (discovered)".Trim() }
 
         $detail = $r.Source
         if (-not $r.Found) { $detail = $r.Error }
@@ -656,6 +704,7 @@ function New-MeHtmlReport {
 
   <div class="cards">
     <div class="card"><div class="n">$total</div><div class="l">Products checked</div></div>
+    <div class="card"><div class="n">$installed</div><div class="l">Installed</div></div>
     <div class="card ok"><div class="n">$ok</div><div class="l">Up to date</div></div>
     <div class="card warn"><div class="n">$outdated</div><div class="l">Update available</div></div>
     <div class="card error"><div class="n">$missing</div><div class="l">Not found</div></div>
@@ -682,7 +731,8 @@ $rowsHtml
   </div>
 
   <footer>
-    Values are read from conf\product.conf in each installation folder.
+    Values are read from conf\product.conf in each installation folder. Rows marked
+    "discovered" were found on this machine but are not listed in the config.
     A service pack does not always rewrite that file, so verify against the product console
     when the exact patch level matters. Reference versions come from the config file.
   </footer>
@@ -773,6 +823,103 @@ foreach ($productEntry in $selected) {
         Write-Host ("  source: {0}" -f $record.Source) -ForegroundColor DarkGray
     } else {
         Write-Warning ("{0}: {1}" -f $productName, $record.Error)
+    }
+}
+
+# Anything installed but not in the config: without this the report only covers what
+# someone remembered to configure, which is the opposite of an inventory.
+if (-not $ConfigOnly) {
+    $normaliseName = {
+        param([string]$Text)
+        $t = ([string]$Text).ToLower()
+        $t = $t -replace '[^a-z0-9]', ''
+        $t = $t -replace 'plus$', ''
+        return $t
+    }
+
+    # Paths already reported, and names deliberately switched off - a product disabled in
+    # the config stays out of the report even though it is installed.
+    $seenPaths = @{}
+    foreach ($r in $results) {
+        if ($r.Source) { $seenPaths[([string]$r.Source).ToLower()] = $true }
+    }
+
+    $excludedNames = @{}
+    foreach ($productEntry in $config.products) {
+        $isEnabled = Get-ConfigValue -Object $productEntry -Name 'enabled' -Default $true
+        if (-not [bool]$isEnabled) {
+            $cfgName = [string](Get-ConfigValue -Object $productEntry -Name 'name' -Default '')
+            if ($cfgName) { $excludedNames[(& $normaliseName $cfgName)] = $true }
+        }
+    }
+
+    foreach ($discovered in (Find-AllProductConfs)) {
+        $confFolder = Split-Path -Parent $discovered.Path
+
+        # Same install already covered by a configured product, whichever file it used.
+        $alreadyReported = $false
+        foreach ($key in $seenPaths.Keys) {
+            if ($key.StartsWith($confFolder.ToLower())) { $alreadyReported = $true; break }
+        }
+        if ($alreadyReported) { continue }
+
+        $folderKey = & $normaliseName $discovered.FolderName
+        if ($excludedNames.ContainsKey($folderKey)) {
+            Write-Verbose "Discovered $($discovered.Path) but its product is disabled in the config"
+            continue
+        }
+
+        $conf = Read-ProductConf -Path $discovered.Path
+        if (-not $conf -or (-not $conf.Build -and -not $conf.Version)) { continue }
+
+        $displayName = $conf.ProductName
+        if ([string]::IsNullOrWhiteSpace($displayName)) { $displayName = $discovered.FolderName }
+
+        if ($wantedNames.Count -gt 0) {
+            $matched = $false
+            foreach ($wanted in $wantedNames) {
+                if ($displayName -like ('*' + [string]$wanted + '*')) { $matched = $true; break }
+            }
+            if (-not $matched) { continue }
+        }
+
+        Write-Host "Discovered $displayName ..." -ForegroundColor DarkCyan
+
+        $extra = [pscustomobject]@{
+            Name             = $displayName
+            InConfig         = $false
+            Found            = $true
+            InstalledVersion = $conf.Version
+            InstalledBuild   = $conf.Build
+            Architecture     = $conf.Architecture
+            ProductName      = $conf.ProductName
+            LatestVersion    = ''
+            LatestBuild      = ''
+            Status           = 'Unknown'
+            BuildStatus      = 'Unknown'
+            Source           = $discovered.Path
+            Error            = $null
+            CheckedAt        = (Get-Date)
+        }
+
+        $higher = Find-HighestBuildConf -ConfFolder $confFolder
+        if ($higher) {
+            $current = 0
+            [void][int]::TryParse(([string]$conf.Build).Trim(), [ref]$current)
+            if ($higher.BuildNumber -gt $current) {
+                $extra.InstalledBuild = $higher.Build
+                if ($higher.Version) { $extra.InstalledVersion = $higher.Version }
+                $extra.Source = $higher.Path
+            }
+        }
+
+        $extra.Status      = Get-VersionStatus -Installed $extra.InstalledVersion -Latest ''
+        $extra.BuildStatus = Get-VersionStatus -Installed $extra.InstalledBuild   -Latest ''
+
+        Write-Host ("  version {0} (build {1})" -f $extra.InstalledVersion, $extra.InstalledBuild)
+        Write-Host ("  source: {0}" -f $extra.Source) -ForegroundColor DarkGray
+
+        [void]$results.Add($extra)
     }
 }
 
