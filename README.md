@@ -1,12 +1,17 @@
-# VersionTool - ManageEngine version checker
+# VersionTool - ManageEngine version inventory
 
 Current version: see [`VERSION`](VERSION).
 
-Reports the installed version and build of ManageEngine products by reading
-`conf\product.conf` from each installation folder, compares them against reference values
-in the config, and writes a self-contained HTML report.
+Scans one or more servers for installed ManageEngine products, reads the version and build
+of each, and writes a self-contained HTML report grouped by server.
 
-ManageEngine products write their identity to a plain key=value file:
+There is no product list to maintain: every ManageEngine product found under the
+installation roots is reported, so one installed later shows up on its own.
+
+## How the version is read
+
+ManageEngine products write their identity to a plain key=value file in the installation
+folder:
 
 ```
 C:\Program Files\ManageEngine\KeyManager\conf\product.conf
@@ -17,171 +22,138 @@ C:\Program Files\ManageEngine\KeyManager\conf\product.conf
   product.processor_architecture=64
 ```
 
-Reading it needs no API token, no API permission and no running web service, which makes it
-the reliable way to inventory installed versions.
+Reading it needs no API token, no API permission and no running web service.
 
-Products covered by the sample config:
+**Nothing is queried over the internet.** The report states what is installed - it does not
+check whether a newer release exists, so there is no outbound firewall rule to open and the
+tool works in a fully disconnected environment.
 
-- ADAudit Plus
-- ADSelfService Plus
-- Key Manager Plus
+## Firewall and permissions
 
-Any other ManageEngine product works too - add an entry with its name and install path.
+| Scenario | What is needed |
+|---|---|
+| Local machine | Nothing. Read access to the installation folder - run elevated if `C:\Program Files` is restricted |
+| Remote server | **SMB, TCP 445** from the machine running the script to the target, the administrative share (`C$`) enabled, and an account with local administrator rights on the target |
+| Internet | **Nothing.** No outbound rule, no proxy, no DNS |
 
-## Setup
+A remote read is an ordinary UNC file read:
 
-1. Run the script once. It creates `config.json` from `config.sample.json`, opens it in
-   Notepad and stops so you can fill it in:
+```
+\\KMP01\C$\Program Files\ManageEngine\KeyManager\conf\product.conf
+```
 
-   ```powershell
-   powershell.exe -ExecutionPolicy Bypass -File .\Get-ManageEngineVersions.ps1
-   ```
-
-   (Doing it by hand works too: `Copy-Item .\config.sample.json .\config.json`.)
-
-2. Per product there are four fields:
-
-   | Field | What it is |
-   |---|---|
-   | `name` | Display name shown in the report |
-   | `installPath` | Installation folder, e.g. `C:\Program Files\ManageEngine\KeyManager` |
-   | `enabled` | `false` skips the product without deleting its entry |
-   | `latestVersion` / `latestBuild` | Reference values to compare against - **optional**, see below |
-
-   Plus two report-wide fields at the top of the file: `reportTitle` and `outputPath`.
-
-   `installPath` can be left out: the script then searches the conventional ManageEngine
-   install roots and the uninstall registry. Setting it is faster and unambiguous. To point
-   at a `product.conf` in a non-standard place, use `confPath` instead.
-
-   Note that the installer does not use the display name verbatim - Key Manager Plus installs
-   into `...\ManageEngine\KeyManager`.
-
-   `latestVersion` / `latestBuild` ship empty. Leave them empty and the report simply states
-   the installed version ("Installed (no reference set)"); fill them in from the product's
-   release-notes page and the report gains an up-to-date / update-available status. They are
-   *not* the installed version - the script reads that from `product.conf`. Nothing here is
-   auto-updated, so a stale reference produces a wrong status; that is why empty is the
-   default rather than a guessed number.
+If that path opens in Explorer, the script will work.
 
 ## Run
 
-Inside the distributed ZIP the script carries its version in the filename
-(`Get-ManageEngineVersions-v2.1.0.ps1`) so it is clear which build is being run; in this
-repository it keeps the plain name. Either way it prints its version on startup:
-
-```
-VersionTool v2.1.0 - Get-ManageEngineVersions-v2.1.0.ps1
-```
-
 ```powershell
-powershell.exe -ExecutionPolicy Bypass -File .\Get-ManageEngineVersions.ps1 -Show
+# this machine
+.\Get-ManageEngineVersions.ps1 -Show
+
+# production, one server per system
+.\Get-ManageEngineVersions.ps1 -ComputerName KMP01,ADAUDIT01,ADSSP01 -Show
 ```
 
 Options:
 
-- `-ConfigPath <path>` - use a different config file (default: `config.json` next to the script)
-- `-OutputPath <path>` - where to write the HTML (default: value of `outputPath` in the config)
-- `-Show` - open the report in the default browser when finished
-- `-Verbose` - log every path that is searched and every file that is read
-- `-Product <name>` - check only the named product(s); a partial name is enough, e.g.
-  `-Product "Key Manager"`. Accepts several: `-Product "Key Manager","ADAudit"`
-- `-ConfigOnly` - report only the configured products, skipping the discovery scan
+- `-ComputerName <names>` - servers to scan, overriding the config
+- `-ConfigPath <path>` - a different config file (default: `config.json` next to the script)
+- `-OutputPath <path>` - where to write the HTML
+- `-Product <name>` - report only products whose name contains this string
+- `-Title <text>` - heading for the report
+- `-Show` - open the report when finished
+- `-Verbose` - log every root scanned and file read
 
 Typical output:
 
 ```
-VersionTool v2.1.0 - Get-ManageEngineVersions-v2.1.0.ps1
-Skipping: ADAudit Plus (disabled in config)
-Checking Key Manager Plus ...
-  version 7.1.2 (build 7120) - Installed (no reference set)
-  architecture: 64-bit
-  source: C:\Program Files\ManageEngine\KeyManager\conf\product.conf
+VersionTool v3.0.0 - Get-ManageEngineVersions-v3.0.0.ps1
+Scanning KMP01 ...
+  ManageEngine KeyManager Plus - version 7.1.2 (build 7120)
+    \\KMP01\C$\Program Files\ManageEngine\KeyManager\conf\product.conf
 
 Report written to: C:\Temp\VersionTool\ManageEngine-Versions.html
 ```
 
-The results are also emitted as objects on the pipeline, so the script can be piped into
-`Export-Csv` or called from a larger monitoring script.
+Results are also emitted as objects, so the script can be piped into `Export-Csv` or called
+from a larger monitoring script.
 
-## What the report covers
+## config.json
 
-By default the report is an inventory of the **machine**, not of the config file:
+Read as it is; the script never rewrites it. It is optional - without it the local machine
+is scanned.
 
-1. Every product listed in `config.json` (unless disabled or excluded by `-Product`).
-2. Plus every other ManageEngine product found under the conventional install roots -
-   these appear marked *(discovered)* and carry no reference version, since the config
-   knows nothing about them.
+```json
+{
+  "reportTitle": "ManageEngine Version Report",
+  "outputPath": "ManageEngine-Versions.html",
+  "servers": ["KMP01", "ADAUDIT01", "ADSSP01"],
+  "searchRoots": []
+}
+```
 
-A product switched off with `"enabled": false` stays out of the report even if it is
-installed - that is the point of the flag. Use `-ConfigOnly` to turn discovery off entirely
-and report exactly the configured list.
+| Field | Meaning |
+|---|---|
+| `reportTitle` | Heading of the report |
+| `outputPath` | Where the HTML is written; relative paths are next to the script |
+| `servers` | Servers to scan. Empty means the local machine |
+| `searchRoots` | Extra folders to search, for installations outside the conventional locations, e.g. `["F:\\Apps\\ManageEngine"]` |
 
-## Checking only the products you have installed
+Backslashes in JSON must be doubled.
 
-The config ships with three products, but you probably do not run all of them:
+Roots searched by default: `C:\ManageEngine`, `C:\Program Files\ManageEngine`,
+`C:\Program Files (x86)\ManageEngine`, `D:\ManageEngine`, `D:\Program Files\ManageEngine`,
+`E:\ManageEngine`.
 
-- **Permanently** - `"enabled": false` on a product in `config.json`. Skipped products are
-  listed at the start of the run.
-- **For one run** - `-Product "Key Manager"`.
+## The report
 
-Deleting the entry works too; `enabled` just keeps the settings around for later.
+One block for ManageEngine, subdivided by server, with a row per product: name, version,
+build, architecture and the file the values came from. Summary cards at the top count
+products, servers scanned, and servers that returned nothing.
 
 ## Caveat: product.conf can lag behind a service pack
 
-On a real Key Manager Plus install, `product.conf` reported build **7120** while the console's
-About dialog showed **7130** - the service pack had not rewritten the file. Take this into
-account before trusting the number:
+On a live Key Manager Plus install, `product.conf` reported build **7120** while the console's
+About dialog showed **7130** - the service pack had not rewritten the file.
 
-- The script scans the whole `conf` folder, not just `product.conf`, and uses the **highest**
-  build number it finds, naming the file it came from in the report's Source column.
-- If every file in `conf` is stale, the reported build is the base install rather than the
-  patched one. Verify against the product console when the exact patch level matters, for
-  example before applying a security update.
+The script reads every `*.conf` in the `conf` folder and reports the highest build number it
+finds, naming the file in the Source column. If all of them are stale, the base install is
+what gets reported. Verify against the product console when the exact patch level matters,
+for example before applying a security update.
 
 ## Troubleshooting
 
-**"Config was just created and still holds placeholder values"**
+**"No ManageEngine installation folder was reachable"**
 
-Expected on the very first run: the script created `config.json` from the template and opened
-it in Notepad. Set `installPath` per product, or disable the products you do not have, then run
-the script again.
+For a remote server, test the path by hand:
 
-**"No product.conf found"**
+```powershell
+Test-Path \\KMP01\C$\Program Files\ManageEngine
+```
 
-The product is not installed on this machine, or it lives somewhere the search does not cover.
-Find the file and set the folder above `conf` as `installPath`:
+If that fails it is SMB, the admin share or permissions - not the script. For a local run,
+the install may be outside the default roots; add it to `searchRoots`, or find it with:
 
 ```powershell
 Get-ChildItem C:\ -Filter product.conf -Recurse -ErrorAction SilentlyContinue |
     Select-Object -ExpandProperty FullName
 ```
 
-**"Found ... but it holds no product.version or product.build_number"**
+**"ManageEngine folders were found but none contained conf\product.conf"**
 
-The file exists but uses different key names. Open it and send the contents - the parser looks
-for `product.version`, `product.build_number` and `product.processor_architecture`, with a few
-aliases.
+The folder layout differs from the expected `<product>\conf\product.conf`. Send the actual
+path and the parser can be adjusted.
 
 **`ConvertFrom-Json : Invalid JSON primitive`**
 
-`config.json` is not valid JSON - usually a path that lost its surrounding quotes, or a missing
-or extra comma after an edit in Notepad. The script names the offending line; fix it, or delete
-`config.json` and run the script again to get a fresh copy.
-
-Backslashes in JSON must be doubled:
-
-```json
-"installPath": "C:\\Program Files\\ManageEngine\\KeyManager"
-```
+`config.json` is not valid JSON - usually an unescaped backslash, or a missing or extra comma
+after an edit. The script names the offending line.
 
 ## Notes
 
 - Written for Windows PowerShell 5.1; no PowerShell 7 syntax is used.
 - The script only reads files - it never writes to a product installation.
-- Reading `product.conf` under `C:\Program Files` may require an elevated PowerShell session,
-  depending on the folder's permissions.
 
 ## Next steps
 
-See [ROADMAP.md](ROADMAP.md) for remaining ideas and hardening steps.
+See [ROADMAP.md](ROADMAP.md).

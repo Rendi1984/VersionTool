@@ -9,14 +9,14 @@ running web service.
 
 - `Get-ManageEngineVersions.ps1` - the tool. Windows PowerShell 5.1 compatible; no PowerShell 7
   syntax (no `??`, no ternary, no `&&`/`||`, ASCII only).
-- `config.sample.json` - template config. Real config lives in `config.json`, which is
-  gitignored.
+- `config.json` - the only config, read as-is and never rewritten by the script. Ships in
+  the ZIP and is committed; it holds no secrets, just a server list.
 - `VERSION` - single source of truth for the release number. Patch for a fix, minor for a new
   capability.
 
-Per product the config carries `name`, `installPath`, `enabled` and the optional
-`latestVersion`/`latestBuild` reference values. Never commit a real token or customer
-hostname.
+The config carries `reportTitle`, `outputPath`, a `servers` list (empty = local machine) and
+optional `searchRoots`. There is no product list: every ManageEngine product found under the
+installation roots is reported. Never commit a real customer hostname.
 
 ---
 
@@ -24,8 +24,7 @@ hostname.
 Whenever files are produced for the user, all three of these are required - no exceptions:
 1. **Package as ZIP**, named `VersionTool-v<version>.zip`, where `<version>` is read from `VERSION`.
    The ZIP holds **only what is needed to run the tool** - today that is
-   `Get-ManageEngineVersions.ps1` and `config.sample.json`. No documentation, no project files.
-   Never include `config.json`: it can hold real tokens.
+   `Get-ManageEngineVersions.ps1` and `config.json`. No documentation, no project files.
    Put the files at the **root of the archive, with no wrapper folder** - extracting already
    creates a folder, so a prefix directory just nests one inside another.
    Inside the ZIP the script is named `Get-ManageEngineVersions-v<version>.ps1`, so it is

@@ -1,7 +1,7 @@
 <#
 .SYNOPSIS
-    Reports the installed version / build of ManageEngine products by reading
-    conf\product.conf, and renders an HTML report.
+    Reports the installed version and build of every ManageEngine product found on one
+    or more servers, and renders an HTML report.
 
 .DESCRIPTION
     ManageEngine products write their identity to a plain key=value file in the
@@ -13,68 +13,66 @@
             product.build_number=7120
             product.processor_architecture=64
 
-    Reading it needs no API token, no API permission and no running web service,
-    which makes it the reliable way to inventory installed versions.
+    The script scans the ManageEngine installation roots on each configured server for
+    that file and reports whatever it finds - no product list to maintain, and a product
+    installed later shows up on its own.
 
-    For each configured product the script locates that file, extracts the version,
-    build number and architecture, compares them against the reference values in the
-    config, and writes a self-contained HTML report. Results are also emitted as
-    objects on the pipeline.
+    Settings live in config.json next to the script. It is read as it is; the script never
+    rewrites it. Without one, the local machine is inventoried.
+
+    Nothing is queried over the internet, so no outbound firewall rule is needed. Reading a
+    remote server goes over SMB (TCP 445) to its administrative share, for example
+    \\KMP01\C$\Program Files\ManageEngine\...
 
     Written for Windows PowerShell 5.1 (no PowerShell 7 syntax).
 
 .PARAMETER ConfigPath
-    Path to the JSON config file. Defaults to config.json next to this script.
+    Path to config.json. Defaults to config.json next to this script.
 
-.PARAMETER OutputPath
-    Path of the HTML report to write. Overrides the value in the config file.
-
-.PARAMETER Show
-    Open the HTML report in the default browser when done.
+.PARAMETER ComputerName
+    Servers to inventory, overriding the "servers" list in config.json.
 
 .PARAMETER Product
-    Check only the named product(s). Matches the "name" field, case-insensitively,
-    and a partial name is enough.
+    Report only products whose name contains one of these strings, case-insensitively.
 
-.PARAMETER ConfigOnly
-    Report only the products listed in the config. By default the script also scans the
-    ManageEngine install roots and includes anything else it finds, so the report is an
-    inventory of the machine rather than of the config file.
+.PARAMETER OutputPath
+    Path of the HTML report. Overrides "outputPath" from the config.
 
-.EXAMPLE
-    powershell.exe -ExecutionPolicy Bypass -File .\Get-ManageEngineVersions.ps1 -Show
+.PARAMETER Show
+    Open the report in the default browser when done.
 
 .EXAMPLE
-    .\Get-ManageEngineVersions.ps1 -Product "Key Manager" -Verbose
+    .\Get-ManageEngineVersions.ps1 -Show
+
+    Inventory the servers listed in config.json and open the report.
+
+.EXAMPLE
+    .\Get-ManageEngineVersions.ps1 -ComputerName KMP01,ADAUDIT01 -Show
+
+    Inventory two servers without touching the config.
 
 .NOTES
-    Products that are not installed can be switched off with "enabled": false in the
-    config instead of being deleted.
-
-    The installation folder is found from "installPath", or "confPath" to point at a
-    product.conf directly; failing both, the conventional ManageEngine install roots
-    and the uninstall registry are searched.
-
-    Note that a service pack does not always rewrite product.conf. The script scans
-    every *.conf in the conf folder and reports the highest build number it finds,
-    naming the file it came from - but if all of them are stale, the base install is
-    what gets reported.
+    A service pack does not always rewrite product.conf: one live install reported build
+    7120 there while the console showed 7130. The script reads every *.conf in the conf
+    folder and reports the highest build number it finds, naming the file it came from -
+    but if all of them are stale, the base install is what gets reported. Verify against
+    the product console when the exact patch level matters.
 #>
 [CmdletBinding()]
 param(
     [string]$ConfigPath,
-    [string]$OutputPath,
-    [switch]$Show,
+    [string[]]$ComputerName,
     [string[]]$Product,
-    [switch]$ConfigOnly
+    [string]$OutputPath,
+    [switch]$Show
 )
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
-# Keep in step with the VERSION file. Printed at startup and in the HTML report so the
-# running copy identifies itself even if the file was renamed or copied elsewhere.
-$script:ToolVersion = '2.1.0'
+# Keep in step with the VERSION file. Printed at startup and in the report so the running
+# copy identifies itself even if the file was renamed or copied elsewhere.
+$script:ToolVersion = '3.0.0'
 
 # ---------------------------------------------------------------------------
 # Config
@@ -85,49 +83,29 @@ function Get-ScriptDirectory {
 }
 
 function Import-MeConfig {
+    <#
+        Reads config.json as it is. Returns $null when there is no config file, in which
+        case the caller inventories the local machine.
+    #>
     param([string]$Path)
 
-    if ([string]::IsNullOrWhiteSpace($Path)) {
+    $explicitlyRequested = -not [string]::IsNullOrWhiteSpace($Path)
+    if (-not $explicitlyRequested) {
         $Path = Join-Path (Get-ScriptDirectory) 'config.json'
     }
+
     if (-not (Test-Path -LiteralPath $Path)) {
-        # First run: create config.json from the shipped template rather than making
-        # the user do it by hand, then stop so the placeholder values get edited.
-        $sample = Join-Path (Get-ScriptDirectory) 'config.sample.json'
-        if (-not (Test-Path -LiteralPath $sample)) {
-            throw "Config file not found: $Path (and no config.sample.json next to the script to create it from)."
-        }
-
-        try {
-            Copy-Item -LiteralPath $sample -Destination $Path -ErrorAction Stop
-        }
-        catch {
-            throw "Config file not found: $Path, and creating it from config.sample.json failed: $($_.Exception.Message)"
-        }
-
-        Write-Host ''
-        Write-Host "Created $Path from config.sample.json." -ForegroundColor Green
-        Write-Host ''
-        Write-Host 'Before running again, edit that file and set "installPath" of each product' -ForegroundColor Yellow
-        Write-Host 'to its installation folder, or delete the products you do not have.'
-        Write-Host 'Products can also be switched off with "enabled": false.'
-        Write-Host ''
-        Write-Host "Opening $Path ..." -ForegroundColor Green
-
-        try { Start-Process -FilePath 'notepad.exe' -ArgumentList $Path -ErrorAction Stop }
-        catch { Write-Host "Could not open an editor automatically - edit $Path yourself." }
-
-        throw 'Config was just created and still holds placeholder values. Edit it, then run this script again.'
+        if ($explicitlyRequested) { throw "Config file not found: $Path" }
+        Write-Verbose 'No config.json next to the script - scanning the local machine.'
+        return $null
     }
 
     $raw = Get-Content -LiteralPath $Path -Raw -Encoding UTF8
 
-    # Get-Content -Raw yields one string, but returns $null for an empty file and an
-    # array if -Raw is ever lost. Normalise, because ConvertFrom-Json on an array parses
-    # each element as its own document and reports a confusing error on the first line.
-    if ($null -eq $raw) {
-        throw "Config file $Path is empty. Delete it and run the script again to recreate it from config.sample.json."
-    }
+    # Get-Content -Raw yields one string, but returns $null for an empty file and an array
+    # if -Raw is ever lost. Normalise, because ConvertFrom-Json on an array parses each
+    # element as its own document and reports a confusing error on the first line.
+    if ($null -eq $raw) { throw "Config file $Path is empty." }
     if ($raw -is [array]) { $raw = $raw -join "`r`n" }
     $raw = [string]$raw
 
@@ -136,15 +114,13 @@ function Import-MeConfig {
     if ($raw.Length -gt 0 -and $raw[0] -eq [char]0xFEFF) { $raw = $raw.Substring(1) }
     $raw = $raw.Trim()
 
-    if ($raw.Length -eq 0) {
-        throw "Config file $Path contains no text. Delete it and run the script again to recreate it."
-    }
+    if ($raw.Length -eq 0) { throw "Config file $Path contains no text." }
 
     try {
-        $cfg = ConvertFrom-Json -InputObject $raw
+        return ConvertFrom-Json -InputObject $raw
     }
     catch {
-        # ConvertFrom-Json only names the offending token ("Invalid JSON primitive: https"),
+        # ConvertFrom-Json only names the offending token ("Invalid JSON primitive: C"),
         # never where it is. Find the line so the file can actually be fixed.
         $detail = $_.Exception.Message
         $hint   = ''
@@ -160,16 +136,11 @@ function Import-MeConfig {
                     break
                 }
             }
-            $hint += "`r`n  A value like this must be inside double quotes, and every entry except the last needs a trailing comma."
+            $hint += "`r`n  Backslashes in a JSON path must be doubled: D:\\ManageEngine"
         }
 
-        throw "Config file $Path is not valid JSON: $detail$hint`r`n  Fix it, or delete it and run the script again to recreate it from config.sample.json."
+        throw "Config file $Path is not valid JSON: $detail$hint"
     }
-
-    if (-not (Get-Member -InputObject $cfg -Name 'products' -MemberType NoteProperty)) {
-        throw "Config file $Path has no 'products' array."
-    }
-    return $cfg
 }
 
 function Get-ConfigValue {
@@ -186,150 +157,16 @@ function Get-ConfigValue {
 }
 
 # ---------------------------------------------------------------------------
-# Version comparison
+# Paths
 # ---------------------------------------------------------------------------
-function ConvertTo-ComparableVersion {
+function Get-SearchRoots {
     <#
-        Turns "8.2.0", "6403", "Build 6200" into a [version] when possible.
-        Returns $null when no numeric form can be derived.
+        Conventional ManageEngine installation roots, plus any extras from the config.
+        Local paths; the caller maps them onto a remote server.
     #>
-    param([string]$Text)
+    param([string[]]$Extra)
 
-    if ([string]::IsNullOrWhiteSpace($Text)) { return $null }
-
-    $match = [regex]::Match($Text, '\d+(\.\d+)*')
-    if (-not $match.Success) { return $null }
-
-    $numeric = $match.Value
-    $parts = $numeric.Split('.')
-    while ($parts.Count -lt 2) { $parts += '0' }
-    if ($parts.Count -gt 4) { $parts = $parts[0..3] }
-
-    try { return [version]($parts -join '.') } catch { return $null }
-}
-
-function Get-VersionStatus {
-    <#
-        Returns: UpToDate | Outdated | Ahead | NoReference | Unknown
-
-        NoReference means the installed version was read successfully but the config
-        carries no value to compare it against. That is a normal, honest outcome -
-        better than inventing a reference version and reporting a false status.
-    #>
-    param([string]$Installed, [string]$Latest)
-
-    if ([string]::IsNullOrWhiteSpace($Installed)) { return 'Unknown' }
-    if ([string]::IsNullOrWhiteSpace($Latest))    { return 'NoReference' }
-
-    $a = ConvertTo-ComparableVersion -Text $Installed
-    $b = ConvertTo-ComparableVersion -Text $Latest
-    if ($null -eq $a -or $null -eq $b) {
-        if ($Installed.Trim() -eq $Latest.Trim()) { return 'UpToDate' }
-        return 'Unknown'
-    }
-
-    if ($a -eq $b) { return 'UpToDate' }
-    if ($a -lt $b) { return 'Outdated' }
-    return 'Ahead'
-}
-
-function Get-StatusLabel {
-    param([string]$Status)
-
-    switch ($Status) {
-        'UpToDate'    { return 'Up to date' }
-        'Outdated'    { return 'Update available' }
-        'Ahead'       { return 'Newer than reference' }
-        'NoReference' { return 'Installed (no reference set)' }
-        default       { return 'Unknown' }
-    }
-}
-
-# ---------------------------------------------------------------------------
-# Locating and reading conf\product.conf
-# ---------------------------------------------------------------------------
-function Get-ProductConfPath {
-    <#
-        Resolves the product.conf for a product, in order of confidence:
-          1. "confPath"    - explicit path to product.conf
-          2. "installPath" - installation folder, conf\product.conf underneath it
-          3. conventional ManageEngine install roots
-          4. InstallLocation of a matching entry in the uninstall registry
-        Returns the path, or $null when nothing matched.
-    #>
-    param($Product, [string]$Name)
-
-    $explicit = [string](Get-ConfigValue -Object $Product -Name 'confPath' -Default '')
-    if ($explicit) {
-        if (Test-Path -LiteralPath $explicit) { return $explicit }
-        Write-Verbose "[$Name] confPath does not exist: $explicit"
-    }
-
-    $installPath = [string](Get-ConfigValue -Object $Product -Name 'installPath' -Default '')
-    if ($installPath) {
-        $candidate = Join-Path $installPath 'conf\product.conf'
-        if (Test-Path -LiteralPath $candidate) { return $candidate }
-        Write-Verbose "[$Name] no product.conf under installPath: $installPath"
-    }
-
-    # The installer does not use the display name verbatim - "Key Manager Plus"
-    # installs into ...\ManageEngine\KeyManager - so compare on a normalised form
-    # rather than guessing a fixed list of spellings.
-    $roots = Get-ManageEngineRoots
-
-    $normalise = {
-        param([string]$Text)
-        $t = ([string]$Text).ToLower()
-        $t = $t -replace '[^a-z0-9]', ''
-        $t = $t -replace 'plus$', ''
-        return $t
-    }
-    $wanted = & $normalise $Name
-
-    foreach ($root in $roots) {
-        if (-not (Test-Path -LiteralPath $root)) { continue }
-
-        try { $subDirs = Get-ChildItem -LiteralPath $root -Directory -ErrorAction Stop }
-        catch { continue }
-
-        foreach ($dir in $subDirs) {
-            $candidate = Join-Path $dir.FullName 'conf\product.conf'
-            if (-not (Test-Path -LiteralPath $candidate)) { continue }
-
-            $folderKey = & $normalise $dir.Name
-            if ($folderKey -eq $wanted -or $folderKey -like "*$wanted*" -or $wanted -like "*$folderKey*") {
-                return $candidate
-            }
-        }
-    }
-
-    # Last resort: ask Windows where the product was installed.
-    $uninstallKeys = @(
-        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
-        'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
-    )
-    foreach ($keyPath in $uninstallKeys) {
-        try {
-            $entries = Get-ItemProperty -Path $keyPath -ErrorAction SilentlyContinue |
-                       Where-Object { $_.DisplayName -and $_.DisplayName -like "*$Name*" -and $_.InstallLocation }
-        }
-        catch { continue }
-
-        foreach ($entry in @($entries)) {
-            $candidate = Join-Path $entry.InstallLocation 'conf\product.conf'
-            if (Test-Path -LiteralPath $candidate) { return $candidate }
-        }
-    }
-
-    return $null
-}
-
-function Get-ManageEngineRoots {
-    <#
-        The conventional installation roots. Kept in one place so discovery and the
-        per-product search agree on where to look.
-    #>
-    return @(
+    $roots = @(
         'C:\ManageEngine',
         'C:\Program Files\ManageEngine',
         'C:\Program Files (x86)\ManageEngine',
@@ -337,43 +174,40 @@ function Get-ManageEngineRoots {
         'D:\Program Files\ManageEngine',
         'E:\ManageEngine'
     )
+    if ($Extra) { $roots += $Extra }
+    return $roots
 }
 
-function Find-AllProductConfs {
+function ConvertTo-RemotePath {
     <#
-        Every conf\product.conf under the ManageEngine roots, so the report can cover
-        what is actually installed rather than only what someone remembered to configure.
-        Returns objects with FolderName and Path.
+        Maps a local path onto a named server's administrative share:
+            C:\Program Files\ManageEngine  +  KMP01
+            -> \\KMP01\C$\Program Files\ManageEngine
+
+        Returns the path unchanged for the local machine or an already-UNC path.
     #>
-    $found = New-Object System.Collections.ArrayList
+    param([string]$Path, [string]$Computer)
 
-    foreach ($root in (Get-ManageEngineRoots)) {
-        if (-not (Test-Path -LiteralPath $root)) { continue }
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $Path }
+    if ([string]::IsNullOrWhiteSpace($Computer)) { return $Path }
+    if ($Computer -eq $env:COMPUTERNAME -or $Computer -eq 'localhost' -or $Computer -eq '.') { return $Path }
+    if ($Path.StartsWith('\\')) { return $Path }
 
-        try { $subDirs = Get-ChildItem -LiteralPath $root -Directory -ErrorAction Stop }
-        catch {
-            Write-Verbose "Could not list ${root}: $($_.Exception.Message)"
-            continue
-        }
-
-        foreach ($dir in $subDirs) {
-            $candidate = Join-Path $dir.FullName 'conf\product.conf'
-            if (Test-Path -LiteralPath $candidate) {
-                [void]$found.Add([pscustomobject]@{
-                    FolderName = $dir.Name
-                    Path       = $candidate
-                })
-            }
-        }
+    if ($Path -match '^([A-Za-z]):\\?(.*)$') {
+        $drive = $Matches[1]
+        $rest  = $Matches[2]
+        return "\\$Computer\$drive`$\$rest"
     }
-
-    return $found.ToArray()
+    return $Path
 }
 
+# ---------------------------------------------------------------------------
+# Reading product.conf
+# ---------------------------------------------------------------------------
 function Read-ProductConf {
     <#
         Parses a product.conf (plain key=value lines, # for comments) and returns the
-        fields of interest, or $null when the file cannot be read.
+        fields of interest, or $null when the file cannot be read or holds nothing useful.
     #>
     param([string]$Path)
 
@@ -420,18 +254,15 @@ function Read-ProductConf {
     }
 }
 
-function Find-HighestBuildConf {
+function Get-HighestBuildInFolder {
     <#
-        A service pack does not always rewrite product.conf - an install can report
-        build 7120 there while the console shows 7130. Scan the conf folder for any
-        other file carrying a build number and return the highest one found, so an
-        applied patch is not missed.
+        A service pack does not always rewrite product.conf - an install can report build
+        7120 there while the console shows 7130. Read every *.conf in the folder and return
+        the one carrying the highest build number.
 
-        Returns a PSCustomObject with Build, BuildNumber, Version and Path, or $null.
+        Returns an object with Build, BuildNumber, Version and Path, or $null.
     #>
     param([string]$ConfFolder)
-
-    if (-not (Test-Path -LiteralPath $ConfFolder)) { return $null }
 
     try {
         $files = Get-ChildItem -LiteralPath $ConfFolder -Filter '*.conf' -File -ErrorAction Stop
@@ -461,75 +292,103 @@ function Find-HighestBuildConf {
 }
 
 # ---------------------------------------------------------------------------
-# Per-product check
+# Per-server scan
 # ---------------------------------------------------------------------------
-function Test-MeProduct {
-    param($Product, [string]$Name)
+function Get-MeProductsOnServer {
+    <#
+        Every ManageEngine product found under the search roots on one server. Returns one
+        record per product; a server with nothing readable yields a single record saying why.
+    #>
+    param([string]$Computer, [string[]]$ExtraRoots)
 
-    $record = [pscustomobject]@{
-        Name             = $Name
-        InConfig         = $true
-        Found            = $false
-        InstalledVersion = $null
-        InstalledBuild   = $null
-        Architecture     = $null
-        ProductName      = $null
-        LatestVersion    = [string](Get-ConfigValue -Object $Product -Name 'latestVersion' -Default '')
-        LatestBuild      = [string](Get-ConfigValue -Object $Product -Name 'latestBuild'   -Default '')
-        Status           = 'Unknown'
-        BuildStatus      = 'Unknown'
-        Source           = $null
-        Error            = $null
-        CheckedAt        = (Get-Date)
-    }
+    $results   = New-Object System.Collections.ArrayList
+    $rootsSeen = 0
 
-    $confPath = Get-ProductConfPath -Product $Product -Name $Name
-    if (-not $confPath) {
-        $record.Error = 'No product.conf found. Set "installPath" to the installation folder, or "confPath" to the file itself.'
-        return $record
-    }
+    foreach ($localRoot in (Get-SearchRoots -Extra $ExtraRoots)) {
+        $root = ConvertTo-RemotePath -Path $localRoot -Computer $Computer
 
-    Write-Verbose "[$Name] reading $confPath"
-    $conf = Read-ProductConf -Path $confPath
+        if (-not (Test-Path -LiteralPath $root)) {
+            Write-Verbose "[$Computer] no such root: $root"
+            continue
+        }
+        $rootsSeen++
+        Write-Verbose "[$Computer] scanning $root"
 
-    if (-not $conf -or (-not $conf.Build -and -not $conf.Version)) {
-        $record.Error = "Found $confPath but it holds no product.version or product.build_number."
-        return $record
-    }
+        try { $subDirs = Get-ChildItem -LiteralPath $root -Directory -ErrorAction Stop }
+        catch {
+            Write-Verbose "[$Computer] could not list ${root}: $($_.Exception.Message)"
+            continue
+        }
 
-    $record.Found            = $true
-    $record.InstalledVersion = $conf.Version
-    $record.InstalledBuild   = $conf.Build
-    $record.Architecture     = $conf.Architecture
-    $record.ProductName      = $conf.ProductName
-    $record.Source           = $confPath
+        foreach ($dir in $subDirs) {
+            $confFolder = Join-Path $dir.FullName 'conf'
+            $confPath   = Join-Path $confFolder 'product.conf'
+            if (-not (Test-Path -LiteralPath $confPath)) { continue }
 
-    # Prefer a higher build recorded by a service pack elsewhere in conf\.
-    $higher = Find-HighestBuildConf -ConfFolder (Split-Path -Parent $confPath)
-    if ($higher) {
-        $current = 0
-        [void][int]::TryParse(([string]$conf.Build).Trim(), [ref]$current)
-        if ($higher.BuildNumber -gt $current) {
-            Write-Verbose "[$Name] $($higher.Path) reports build $($higher.Build), higher than product.conf ($($conf.Build))"
-            $record.InstalledBuild = $higher.Build
-            if ($higher.Version) { $record.InstalledVersion = $higher.Version }
-            $record.Source = $higher.Path
+            $conf = Read-ProductConf -Path $confPath
+            if (-not $conf -or (-not $conf.Build -and -not $conf.Version)) {
+                Write-Verbose "[$Computer] $confPath holds no version or build number"
+                continue
+            }
+
+            $displayName = $conf.ProductName
+            if ([string]::IsNullOrWhiteSpace($displayName)) { $displayName = $dir.Name }
+
+            $record = [pscustomobject]@{
+                Server       = $Computer
+                Name         = $displayName
+                FolderName   = $dir.Name
+                Version      = $conf.Version
+                Build        = $conf.Build
+                Architecture = $conf.Architecture
+                InstallPath  = $dir.FullName
+                Source       = $confPath
+                Found        = $true
+                Error        = $null
+                CheckedAt    = (Get-Date)
+            }
+
+            # Prefer a higher build recorded by a service pack elsewhere in conf\.
+            $higher = Get-HighestBuildInFolder -ConfFolder $confFolder
+            if ($higher) {
+                $current = 0
+                [void][int]::TryParse(([string]$conf.Build).Trim(), [ref]$current)
+                if ($higher.BuildNumber -gt $current) {
+                    Write-Verbose "[$Computer] $($higher.Path) reports build $($higher.Build), higher than product.conf ($($conf.Build))"
+                    $record.Build = $higher.Build
+                    if ($higher.Version) { $record.Version = $higher.Version }
+                    $record.Source = $higher.Path
+                }
+            }
+
+            [void]$results.Add($record)
         }
     }
 
-    $record.Status      = Get-VersionStatus -Installed $record.InstalledVersion -Latest $record.LatestVersion
-    $record.BuildStatus = Get-VersionStatus -Installed $record.InstalledBuild   -Latest $record.LatestBuild
+    if ($results.Count -eq 0) {
+        if ($rootsSeen -eq 0) {
+            $reason = 'No ManageEngine installation folder was reachable. For a remote server check that it is online, that the admin share (C$) is available and that SMB (TCP 445) is open; add a non-standard location to "searchRoots" in the config.'
+        }
+        else {
+            $reason = 'ManageEngine folders were found but none contained conf\product.conf.'
+        }
 
-    # A newer build of the same version still means an update is pending.
-    if ($record.Status -eq 'UpToDate' -and $record.BuildStatus -eq 'Outdated') {
-        $record.Status = 'Outdated'
-    }
-    # No version in the file, but a build number that could be compared.
-    if ($record.Status -eq 'Unknown' -and $record.BuildStatus -ne 'Unknown') {
-        $record.Status = $record.BuildStatus
+        [void]$results.Add([pscustomobject]@{
+            Server       = $Computer
+            Name         = 'No products found'
+            FolderName   = $null
+            Version      = $null
+            Build        = $null
+            Architecture = $null
+            InstallPath  = $null
+            Source       = $null
+            Found        = $false
+            Error        = $reason
+            CheckedAt    = (Get-Date)
+        })
     }
 
-    return $record
+    return $results.ToArray()
 }
 
 # ---------------------------------------------------------------------------
@@ -555,66 +414,84 @@ function New-MeHtmlReport {
 
     $generated = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
 
-    $total    = @($Results).Count
-    $ok       = @($Results | Where-Object { $_.Status -eq 'UpToDate' }).Count
-    $outdated = @($Results | Where-Object { $_.Status -eq 'Outdated' }).Count
-    $missing  = @($Results | Where-Object { -not $_.Found }).Count
     $installed = @($Results | Where-Object { $_.Found }).Count
+    $servers   = @($Results | ForEach-Object { $_.Server } | Sort-Object -Unique).Count
+    $failed    = @($Results | Where-Object { -not $_.Found }).Count
 
-    $rows = New-Object System.Collections.ArrayList
-    foreach ($r in $Results) {
-        $statusClass = 'unknown'
-        if (-not $r.Found) {
-            $statusClass = 'error'
-        } else {
-            switch ($r.Status) {
-                'UpToDate'    { $statusClass = 'ok' }
-                'Outdated'    { $statusClass = 'warn' }
-                'Ahead'       { $statusClass = 'info' }
-                'NoReference' { $statusClass = 'info' }
-                default       { $statusClass = 'unknown' }
-            }
-        }
+    # One block per server: in production each product tends to have its own machine.
+    $groups = $Results | Group-Object -Property Server | Sort-Object Name
 
-        $statusText = Get-StatusLabel -Status $r.Status
-        if (-not $r.Found) { $statusText = 'Not found' }
+    $sections = New-Object System.Collections.ArrayList
+    foreach ($group in $groups) {
+        $rows = New-Object System.Collections.ArrayList
 
-        $installed = $r.InstalledVersion
-        if ([string]::IsNullOrWhiteSpace($installed)) { $installed = '-' }
-        $installedBuild = $r.InstalledBuild
-        if ([string]::IsNullOrWhiteSpace($installedBuild)) { $installedBuild = '-' }
-        $latest = $r.LatestVersion
-        if ([string]::IsNullOrWhiteSpace($latest)) { $latest = '-' }
-        $latestBuild = $r.LatestBuild
-        if ([string]::IsNullOrWhiteSpace($latestBuild)) { $latestBuild = '-' }
-        $architecture = $r.Architecture
-        if ([string]::IsNullOrWhiteSpace($architecture)) { $architecture = '-' }
-        else { $architecture = "$architecture-bit" }
-
-        $subtitle = $r.ProductName
-        if ([string]::IsNullOrWhiteSpace($subtitle)) { $subtitle = '' }
-        if (-not $r.InConfig) { $subtitle = "$subtitle (discovered)".Trim() }
-
-        $detail = $r.Source
-        if (-not $r.Found) { $detail = $r.Error }
-        if ([string]::IsNullOrWhiteSpace($detail)) { $detail = '-' }
-
-        $row = @"
-      <tr>
-        <td class="product">$(ConvertTo-HtmlText $r.Name)<span class="url">$(ConvertTo-HtmlText $subtitle)</span></td>
-        <td class="version">$(ConvertTo-HtmlText $installed)</td>
-        <td>$(ConvertTo-HtmlText $installedBuild)</td>
-        <td>$(ConvertTo-HtmlText $architecture)</td>
-        <td>$(ConvertTo-HtmlText $latest)</td>
-        <td>$(ConvertTo-HtmlText $latestBuild)</td>
-        <td><span class="badge $statusClass">$(ConvertTo-HtmlText $statusText)</span></td>
-        <td class="detail">$(ConvertTo-HtmlText $detail)</td>
+        foreach ($r in ($group.Group | Sort-Object Name)) {
+            if (-not $r.Found) {
+                $row = @"
+      <tr class="missing">
+        <td class="product">$(ConvertTo-HtmlText $r.Name)</td>
+        <td class="version">-</td>
+        <td class="build">-</td>
+        <td>-</td>
+        <td class="detail">$(ConvertTo-HtmlText $r.Error)</td>
       </tr>
 "@
-        [void]$rows.Add($row)
+                [void]$rows.Add($row)
+                continue
+            }
+
+            $version = $r.Version
+            if ([string]::IsNullOrWhiteSpace($version)) { $version = '-' }
+            $build = $r.Build
+            if ([string]::IsNullOrWhiteSpace($build)) { $build = '-' }
+
+            $architecture = $r.Architecture
+            if ([string]::IsNullOrWhiteSpace($architecture)) { $architecture = '-' }
+            else { $architecture = "$architecture-bit" }
+
+            $row = @"
+      <tr>
+        <td class="product">$(ConvertTo-HtmlText $r.Name)<span class="sub">$(ConvertTo-HtmlText $r.InstallPath)</span></td>
+        <td class="version">$(ConvertTo-HtmlText $version)</td>
+        <td class="build">$(ConvertTo-HtmlText $build)</td>
+        <td>$(ConvertTo-HtmlText $architecture)</td>
+        <td class="detail">$(ConvertTo-HtmlText $r.Source)</td>
+      </tr>
+"@
+            [void]$rows.Add($row)
+        }
+
+        $rowsHtml = ($rows -join "`r`n")
+        $count = @($group.Group | Where-Object { $_.Found }).Count
+
+        $section = @"
+    <div class="server">
+      <div class="server-head">
+        <span class="server-name">$(ConvertTo-HtmlText $group.Name)</span>
+        <span class="server-count">$count product(s)</span>
+      </div>
+      <div class="tablewrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Product</th>
+              <th>Version</th>
+              <th>Build</th>
+              <th>Arch</th>
+              <th>Source</th>
+            </tr>
+          </thead>
+          <tbody>
+$rowsHtml
+          </tbody>
+        </table>
+      </div>
+    </div>
+"@
+        [void]$sections.Add($section)
     }
 
-    $rowsHtml = ($rows -join "`r`n")
+    $sectionsHtml = ($sections -join "`r`n")
 
     $html = @"
 <!DOCTYPE html>
@@ -627,13 +504,13 @@ function New-MeHtmlReport {
   :root {
     --bg: #14131a;
     --panel: #1c1b24;
+    --panel2: #221f2c;
     --border: #2c2a37;
     --text: #e8e6f0;
     --muted: #9a95ad;
+    --accent: #9184d9;
     --ok: #4ec9a0;
-    --warn: #e0a34a;
     --error: #e06c75;
-    --info: #6aa8e0;
   }
   * { box-sizing: border-box; }
   body {
@@ -644,12 +521,12 @@ function New-MeHtmlReport {
     font-family: "Segoe UI", Inter, Arial, sans-serif;
     font-size: 14px;
   }
-  .wrap { max-width: 1100px; margin: 0 auto; }
+  .wrap { max-width: 1080px; margin: 0 auto; }
   h1 { font-size: 22px; margin: 0 0 4px; }
-  .sub { color: var(--muted); font-size: 13px; margin-bottom: 24px; }
-  .cards { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 24px; }
+  .sub-line { color: var(--muted); font-size: 13px; margin-bottom: 24px; }
+  .cards { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 28px; }
   .card {
-    flex: 1 1 160px;
+    flex: 1 1 150px;
     background: var(--panel);
     border: 1px solid var(--border);
     border-radius: 10px;
@@ -658,16 +535,47 @@ function New-MeHtmlReport {
   .card .n { font-size: 24px; font-weight: 600; }
   .card .l { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .06em; }
   .card.ok .n { color: var(--ok); }
-  .card.warn .n { color: var(--warn); }
   .card.error .n { color: var(--error); }
-  .tablewrap {
+
+  /* Vendor block - everything ManageEngine lives inside this one region. */
+  .vendor {
     background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 24px;
+  }
+  .vendor-head {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    padding-bottom: 14px;
+    margin-bottom: 18px;
+    border-bottom: 2px solid var(--accent);
+  }
+  .vendor-head .title { font-size: 17px; font-weight: 700; }
+  .vendor-head .meta { color: var(--muted); font-size: 12px; }
+
+  .server { margin-bottom: 20px; }
+  .server:last-child { margin-bottom: 0; }
+  .server-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px; }
+  .server-name {
+    font-weight: 600;
+    font-size: 13px;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+  .server-count { color: var(--muted); font-size: 12px; }
+
+  .tablewrap {
+    background: var(--panel2);
     border: 1px solid var(--border);
     border-radius: 10px;
     overflow-x: auto;
   }
-  table { width: 100%; border-collapse: collapse; min-width: 820px; }
-  th, td { padding: 12px 14px; text-align: left; border-bottom: 1px solid var(--border); vertical-align: top; }
+  table { width: 100%; border-collapse: collapse; min-width: 700px; }
+  th, td { padding: 11px 14px; text-align: left; border-bottom: 1px solid var(--border); vertical-align: top; }
   th {
     color: var(--muted);
     font-size: 11px;
@@ -677,64 +585,39 @@ function New-MeHtmlReport {
   }
   tr:last-child td { border-bottom: none; }
   td.product { font-weight: 600; }
-  td.product .url { display: block; font-weight: 400; color: var(--muted); font-size: 12px; margin-top: 3px; }
-  td.version { font-weight: 700; font-size: 15px; }
-  td.detail { color: var(--muted); font-size: 12px; max-width: 340px; word-break: break-word; }
-  .badge {
-    display: inline-block;
-    padding: 3px 10px;
-    border-radius: 999px;
-    font-size: 12px;
-    font-weight: 600;
-    border: 1px solid transparent;
-    white-space: nowrap;
-  }
-  .badge.ok { color: var(--ok); border-color: var(--ok); }
-  .badge.warn { color: var(--warn); border-color: var(--warn); }
-  .badge.error { color: var(--error); border-color: var(--error); }
-  .badge.info { color: var(--info); border-color: var(--info); }
-  .badge.unknown { color: var(--muted); border-color: var(--muted); }
+  td.product .sub { display: block; font-weight: 400; color: var(--muted); font-size: 12px; margin-top: 3px; }
+  td.version { font-weight: 700; font-size: 16px; color: var(--ok); }
+  td.build { font-variant-numeric: tabular-nums; }
+  td.detail { color: var(--muted); font-size: 12px; max-width: 380px; word-break: break-word; }
+  tr.missing td.version, tr.missing td.build { color: var(--error); }
   footer { color: var(--muted); font-size: 12px; margin-top: 20px; line-height: 1.6; }
 </style>
 </head>
 <body>
 <div class="wrap">
   <h1>$(ConvertTo-HtmlText $Title)</h1>
-  <div class="sub">Generated $generated on $(ConvertTo-HtmlText $env:COMPUTERNAME) by VersionTool v$(ConvertTo-HtmlText $script:ToolVersion)</div>
+  <div class="sub-line">Generated $generated on $(ConvertTo-HtmlText $env:COMPUTERNAME) by VersionTool v$(ConvertTo-HtmlText $script:ToolVersion)</div>
 
   <div class="cards">
-    <div class="card"><div class="n">$total</div><div class="l">Products checked</div></div>
-    <div class="card"><div class="n">$installed</div><div class="l">Installed</div></div>
-    <div class="card ok"><div class="n">$ok</div><div class="l">Up to date</div></div>
-    <div class="card warn"><div class="n">$outdated</div><div class="l">Update available</div></div>
-    <div class="card error"><div class="n">$missing</div><div class="l">Not found</div></div>
+    <div class="card ok"><div class="n">$installed</div><div class="l">Products installed</div></div>
+    <div class="card"><div class="n">$servers</div><div class="l">Servers scanned</div></div>
+    <div class="card error"><div class="n">$failed</div><div class="l">Servers with no result</div></div>
   </div>
 
-  <div class="tablewrap">
-    <table>
-      <thead>
-        <tr>
-          <th>Product</th>
-          <th>Installed version</th>
-          <th>Build</th>
-          <th>Arch</th>
-          <th>Reference version</th>
-          <th>Reference build</th>
-          <th>Status</th>
-          <th>Source</th>
-        </tr>
-      </thead>
-      <tbody>
-$rowsHtml
-      </tbody>
-    </table>
+  <div class="vendor">
+    <div class="vendor-head">
+      <span class="title">ManageEngine</span>
+      <span class="meta">$installed product(s) across $servers server(s)</span>
+    </div>
+$sectionsHtml
   </div>
 
   <footer>
-    Values are read from conf\product.conf in each installation folder. Rows marked
-    "discovered" were found on this machine but are not listed in the config.
-    A service pack does not always rewrite that file, so verify against the product console
-    when the exact patch level matters. Reference versions come from the config file.
+    Versions are read from conf\product.conf in each installation folder. Nothing is queried
+    over the internet, so no outbound firewall rule is required; reading a remote server uses
+    SMB (TCP 445) to its administrative share.
+    A service pack does not always rewrite product.conf, so verify against the product console
+    when the exact patch level matters.
   </footer>
 </div>
 </body>
@@ -757,7 +640,10 @@ Write-Host ("VersionTool v{0} - {1}" -f $script:ToolVersion, $MyInvocation.MyCom
 
 $config = Import-MeConfig -Path $ConfigPath
 
-$title = [string](Get-ConfigValue -Object $config -Name 'reportTitle' -Default 'ManageEngine Version Report')
+$title = $Title
+if ([string]::IsNullOrWhiteSpace($title)) {
+    $title = [string](Get-ConfigValue -Object $config -Name 'reportTitle' -Default 'ManageEngine Version Report')
+}
 
 $outFile = $OutputPath
 if ([string]::IsNullOrWhiteSpace($outFile)) {
@@ -767,159 +653,45 @@ if (-not [System.IO.Path]::IsPathRooted($outFile)) {
     $outFile = Join-Path (Get-ScriptDirectory) $outFile
 }
 
-# Narrow the product list first: not every product in the config is installed here,
-# and checking one that is not just produces noise in the report.
-#
-# NOTE: the loop variable must not be called $product - PowerShell variable names are
-# case-insensitive, so it would overwrite the -Product parameter on the first iteration.
-$wantedNames = @($Product)
+$extraRoots = @(Get-ConfigValue -Object $config -Name 'searchRoots' -Default @())
 
-$selected = New-Object System.Collections.ArrayList
-$skipped  = New-Object System.Collections.ArrayList
-
-foreach ($productEntry in $config.products) {
-    $productName = [string](Get-ConfigValue -Object $productEntry -Name 'name' -Default 'Unknown product')
-
-    # "enabled": false marks a product as not installed here. Absent means enabled.
-    $isEnabled = Get-ConfigValue -Object $productEntry -Name 'enabled' -Default $true
-    if (-not [bool]$isEnabled) {
-        [void]$skipped.Add("$productName (disabled in config)")
-        continue
-    }
-
-    if ($wantedNames.Count -gt 0) {
-        $matched = $false
-        foreach ($wanted in $wantedNames) {
-            if ($productName -like ('*' + [string]$wanted + '*')) { $matched = $true; break }
-        }
-        if (-not $matched) {
-            [void]$skipped.Add("$productName (not selected by -Product)")
-            continue
-        }
-    }
-
-    [void]$selected.Add($productEntry)
+# -ComputerName wins over the config; an empty list means this machine.
+$targets = @($ComputerName)
+if ($targets.Count -eq 0) {
+    $targets = @(Get-ConfigValue -Object $config -Name 'servers' -Default @())
 }
-
-if ($skipped.Count -gt 0) {
-    Write-Host ("Skipping: {0}" -f ($skipped -join ', ')) -ForegroundColor DarkGray
-}
-if ($selected.Count -eq 0) {
-    throw 'No products left to check. Every product is either disabled in the config or excluded by -Product.'
-}
+$targets = @($targets | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+if ($targets.Count -eq 0) { $targets = @($env:COMPUTERNAME) }
 
 $results = New-Object System.Collections.ArrayList
-foreach ($productEntry in $selected) {
-    $productName = [string](Get-ConfigValue -Object $productEntry -Name 'name' -Default 'Unknown product')
-    Write-Host "Checking $productName ..."
 
-    $record = Test-MeProduct -Product $productEntry -Name $productName
-    [void]$results.Add($record)
+foreach ($target in $targets) {
+    Write-Host "Scanning $target ..."
 
-    if ($record.Found) {
-        Write-Host ("  version {0} (build {1}) - {2}" -f `
-            $record.InstalledVersion, $record.InstalledBuild, (Get-StatusLabel -Status $record.Status))
-        if ($record.Architecture) { Write-Host ("  architecture: {0}-bit" -f $record.Architecture) }
-        Write-Host ("  source: {0}" -f $record.Source) -ForegroundColor DarkGray
-    } else {
-        Write-Warning ("{0}: {1}" -f $productName, $record.Error)
-    }
-}
+    $found = Get-MeProductsOnServer -Computer ([string]$target) -ExtraRoots $extraRoots
 
-# Anything installed but not in the config: without this the report only covers what
-# someone remembered to configure, which is the opposite of an inventory.
-if (-not $ConfigOnly) {
-    $normaliseName = {
-        param([string]$Text)
-        $t = ([string]$Text).ToLower()
-        $t = $t -replace '[^a-z0-9]', ''
-        $t = $t -replace 'plus$', ''
-        return $t
-    }
-
-    # Paths already reported, and names deliberately switched off - a product disabled in
-    # the config stays out of the report even though it is installed.
-    $seenPaths = @{}
-    foreach ($r in $results) {
-        if ($r.Source) { $seenPaths[([string]$r.Source).ToLower()] = $true }
-    }
-
-    $excludedNames = @{}
-    foreach ($productEntry in $config.products) {
-        $isEnabled = Get-ConfigValue -Object $productEntry -Name 'enabled' -Default $true
-        if (-not [bool]$isEnabled) {
-            $cfgName = [string](Get-ConfigValue -Object $productEntry -Name 'name' -Default '')
-            if ($cfgName) { $excludedNames[(& $normaliseName $cfgName)] = $true }
-        }
-    }
-
-    foreach ($discovered in (Find-AllProductConfs)) {
-        $confFolder = Split-Path -Parent $discovered.Path
-
-        # Same install already covered by a configured product, whichever file it used.
-        $alreadyReported = $false
-        foreach ($key in $seenPaths.Keys) {
-            if ($key.StartsWith($confFolder.ToLower())) { $alreadyReported = $true; break }
-        }
-        if ($alreadyReported) { continue }
-
-        $folderKey = & $normaliseName $discovered.FolderName
-        if ($excludedNames.ContainsKey($folderKey)) {
-            Write-Verbose "Discovered $($discovered.Path) but its product is disabled in the config"
-            continue
-        }
-
-        $conf = Read-ProductConf -Path $discovered.Path
-        if (-not $conf -or (-not $conf.Build -and -not $conf.Version)) { continue }
-
-        $displayName = $conf.ProductName
-        if ([string]::IsNullOrWhiteSpace($displayName)) { $displayName = $discovered.FolderName }
-
-        if ($wantedNames.Count -gt 0) {
+    foreach ($record in $found) {
+        if ($record.Found -and $Product -and @($Product).Count -gt 0) {
             $matched = $false
-            foreach ($wanted in $wantedNames) {
-                if ($displayName -like ('*' + [string]$wanted + '*')) { $matched = $true; break }
+            foreach ($wanted in $Product) {
+                if ($record.Name -like ('*' + [string]$wanted + '*') -or
+                    $record.FolderName -like ('*' + [string]$wanted + '*')) {
+                    $matched = $true
+                    break
+                }
             }
             if (-not $matched) { continue }
         }
 
-        Write-Host "Discovered $displayName ..." -ForegroundColor DarkCyan
+        [void]$results.Add($record)
 
-        $extra = [pscustomobject]@{
-            Name             = $displayName
-            InConfig         = $false
-            Found            = $true
-            InstalledVersion = $conf.Version
-            InstalledBuild   = $conf.Build
-            Architecture     = $conf.Architecture
-            ProductName      = $conf.ProductName
-            LatestVersion    = ''
-            LatestBuild      = ''
-            Status           = 'Unknown'
-            BuildStatus      = 'Unknown'
-            Source           = $discovered.Path
-            Error            = $null
-            CheckedAt        = (Get-Date)
+        if ($record.Found) {
+            Write-Host ("  {0} - version {1} (build {2})" -f $record.Name, $record.Version, $record.Build)
+            Write-Host ("    {0}" -f $record.Source) -ForegroundColor DarkGray
         }
-
-        $higher = Find-HighestBuildConf -ConfFolder $confFolder
-        if ($higher) {
-            $current = 0
-            [void][int]::TryParse(([string]$conf.Build).Trim(), [ref]$current)
-            if ($higher.BuildNumber -gt $current) {
-                $extra.InstalledBuild = $higher.Build
-                if ($higher.Version) { $extra.InstalledVersion = $higher.Version }
-                $extra.Source = $higher.Path
-            }
+        else {
+            Write-Warning ("{0}: {1}" -f $target, $record.Error)
         }
-
-        $extra.Status      = Get-VersionStatus -Installed $extra.InstalledVersion -Latest ''
-        $extra.BuildStatus = Get-VersionStatus -Installed $extra.InstalledBuild   -Latest ''
-
-        Write-Host ("  version {0} (build {1})" -f $extra.InstalledVersion, $extra.InstalledBuild)
-        Write-Host ("  source: {0}" -f $extra.Source) -ForegroundColor DarkGray
-
-        [void]$results.Add($extra)
     }
 }
 
