@@ -7,6 +7,7 @@
     {
       "name": "ADAudit Plus",
       "enabled": true,
+      "installPath": "C:\\ManageEngine\\ADAudit Plus",
       "baseUrl": "https://adaudit.corp.local:8081",
       "tokenEnvVar": "ME_ADAUDIT_TOKEN",
       "endpoints": [
@@ -20,6 +21,7 @@
     {
       "name": "ADSelfService Plus",
       "enabled": true,
+      "installPath": "C:\\ManageEngine\\ADSelfService Plus",
       "baseUrl": "https://adssp.corp.local:8888",
       "tokenEnvVar": "ME_ADSSP_TOKEN",
       "endpoints": [
@@ -33,6 +35,7 @@
     {
       "name": "Key Manager Plus",
       "enabled": true,
+      "installPath": "C:\\ManageEngine\\Key Manager Plus",
       "baseUrl": "https://kmp.corp.local:6565",
       "tokenEnvVar": "ME_KMP_TOKEN",
       "endpoints": [

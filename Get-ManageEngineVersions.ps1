@@ -1,20 +1,23 @@
 <#
 .SYNOPSIS
-    Checks the installed version / build of ManageEngine products via their REST APIs
-    and renders an HTML report.
+    Checks the installed version / build of ManageEngine products and renders an
+    HTML report.
 
 .DESCRIPTION
     Supported products (configurable): ADAudit Plus, ADSelfService Plus, Key Manager Plus.
 
-    For each product the script calls the configured API endpoints in order until one
-    returns a parseable response, extracts the version and build number, compares them
-    against the "latest" values defined in the config, and writes a self-contained
-    HTML report.
+    Two sources are used, in order:
 
-    Authentication is token based (ManageEngine AUTHTOKEN). Tokens may be supplied
-    per product via:
-      1. the "token" field in the config file (not recommended for production), or
-      2. an environment variable named by "tokenEnvVar" (recommended).
+      1. conf\product.conf in the product installation folder. ManageEngine writes
+         product.build_number and product.processor_architecture there. This needs no
+         token, no API permission and no running web service, so it is tried first.
+      2. The REST API, when no product.conf is found - for example when checking a
+         remote server. Authentication is token based (ManageEngine AUTHTOKEN),
+         supplied per product via the "token" field or an environment variable named
+         by "tokenEnvVar".
+
+    The values are compared against the "latest" values defined in the config, and the
+    result is written as a self-contained HTML report.
 
     Written for Windows PowerShell 5.1 (no PowerShell 7 syntax).
 
@@ -31,6 +34,10 @@
     Check only the named product(s). Matches the "name" field, case-insensitively, and a
     partial name is enough. Use this for a one-off check without editing the config.
 
+.PARAMETER SkipLocal
+    Ignore conf\product.conf and query the REST API instead. Use when checking a remote
+    server, or to verify that the API path in the config actually works.
+
 .EXAMPLE
     powershell.exe -ExecutionPolicy Bypass -File .\Get-ManageEngineVersions.ps1 -Show
 
@@ -43,13 +50,17 @@
 .NOTES
     Products that are not installed can be switched off permanently by adding
     "enabled": false to their entry in the config, instead of deleting them.
+
+    A product.conf outside the conventional locations can be pointed at directly with
+    "confPath", or its install folder given as "installPath".
 #>
 [CmdletBinding()]
 param(
     [string]$ConfigPath,
     [string]$OutputPath,
     [switch]$Show,
-    [string[]]$Product
+    [string[]]$Product,
+    [switch]$SkipLocal
 )
 
 Set-StrictMode -Version 2.0
@@ -57,7 +68,7 @@ $ErrorActionPreference = 'Stop'
 
 # Keep in step with the VERSION file. Printed at startup and in the HTML report so the
 # running copy identifies itself even if the file was renamed or copied elsewhere.
-$script:ToolVersion = '1.3.0'
+$script:ToolVersion = '1.4.0'
 
 # ---------------------------------------------------------------------------
 # TLS / certificate handling
@@ -469,10 +480,130 @@ function Get-VersionStatus {
 }
 
 # ---------------------------------------------------------------------------
+# Local install: conf\product.conf
+#
+# ManageEngine products share an installer layout that writes the build number to
+# <install folder>\conf\product.conf. Reading it needs no token, no API permission and
+# no running web service, so it is tried before any HTTP call.
+# ---------------------------------------------------------------------------
+function Get-ProductConfPath {
+    <#
+        Resolves the product.conf for a product, in order of confidence:
+          1. "confPath"    - explicit path to product.conf
+          2. "installPath" - installation folder, conf\product.conf underneath it
+          3. conventional install locations for the product name
+          4. InstallLocation of a matching entry in the uninstall registry
+        Returns the path, or $null when nothing matched.
+    #>
+    param($Product, [string]$Name)
+
+    $explicit = [string](Get-ConfigValue -Object $Product -Name 'confPath' -Default '')
+    if ($explicit) {
+        if (Test-Path -LiteralPath $explicit) { return $explicit }
+        Write-Verbose "[$Name] confPath does not exist: $explicit"
+    }
+
+    $installPath = [string](Get-ConfigValue -Object $Product -Name 'installPath' -Default '')
+    if ($installPath) {
+        $candidate = Join-Path $installPath 'conf\product.conf'
+        if (Test-Path -LiteralPath $candidate) { return $candidate }
+        Write-Verbose "[$Name] no product.conf under installPath: $installPath"
+    }
+
+    # Conventional locations. The folder is usually the product name as displayed.
+    $roots = @(
+        'C:\ManageEngine',
+        'C:\Program Files\ManageEngine',
+        'C:\Program Files (x86)\ManageEngine',
+        'D:\ManageEngine',
+        'E:\ManageEngine'
+    )
+    $folderNames = @($Name, ($Name -replace '\s+', ''), ($Name -replace '\s*Plus$', ''))
+
+    foreach ($root in $roots) {
+        if (-not (Test-Path -LiteralPath $root)) { continue }
+        foreach ($folder in $folderNames) {
+            if ([string]::IsNullOrWhiteSpace($folder)) { continue }
+            $candidate = Join-Path $root (Join-Path $folder 'conf\product.conf')
+            if (Test-Path -LiteralPath $candidate) { return $candidate }
+        }
+    }
+
+    # Last resort: ask Windows where the product was installed.
+    $uninstallKeys = @(
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+        'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+    )
+    foreach ($keyPath in $uninstallKeys) {
+        try {
+            $entries = Get-ItemProperty -Path $keyPath -ErrorAction SilentlyContinue |
+                       Where-Object { $_.DisplayName -and $_.DisplayName -like "*$Name*" -and $_.InstallLocation }
+        }
+        catch { continue }
+
+        foreach ($entry in @($entries)) {
+            $candidate = Join-Path $entry.InstallLocation 'conf\product.conf'
+            if (Test-Path -LiteralPath $candidate) { return $candidate }
+        }
+    }
+
+    return $null
+}
+
+function Read-ProductConf {
+    <#
+        Parses a product.conf (plain key=value lines, # for comments) and returns the
+        fields of interest, or $null when the file cannot be read.
+    #>
+    param([string]$Path)
+
+    try {
+        $lines = Get-Content -LiteralPath $Path -ErrorAction Stop
+    }
+    catch {
+        Write-Verbose "Could not read ${Path}: $($_.Exception.Message)"
+        return $null
+    }
+
+    $values = @{}
+    foreach ($line in $lines) {
+        $text = [string]$line
+        if ($text -match '^\s*#') { continue }
+
+        $split = $text.IndexOf('=')
+        if ($split -lt 1) { continue }
+
+        $key = $text.Substring(0, $split).Trim()
+        $val = $text.Substring($split + 1).Trim()
+        if ($key) { $values[$key.ToLower()] = $val }
+    }
+
+    if ($values.Count -eq 0) { return $null }
+
+    $get = {
+        param([string[]]$Names)
+        foreach ($n in $Names) {
+            if ($values.ContainsKey($n) -and -not [string]::IsNullOrWhiteSpace($values[$n])) {
+                return $values[$n]
+            }
+        }
+        return $null
+    }
+
+    return [pscustomobject]@{
+        Build        = (& $get @('product.build_number', 'build_number', 'buildnumber'))
+        Version      = (& $get @('product.version', 'version', 'product.release'))
+        Architecture = (& $get @('product.processor_architecture', 'processor_architecture'))
+        ProductName  = (& $get @('product.name', 'productname'))
+        Path         = $Path
+    }
+}
+
+# ---------------------------------------------------------------------------
 # Per-product check
 # ---------------------------------------------------------------------------
 function Test-MeProduct {
-    param($Product, [int]$TimeoutSec)
+    param($Product, [int]$TimeoutSec, [bool]$SkipLocal = $false)
 
     $name    = [string](Get-ConfigValue -Object $Product -Name 'name'    -Default 'Unknown product')
     $baseUrl = [string](Get-ConfigValue -Object $Product -Name 'baseUrl' -Default '')
@@ -485,6 +616,8 @@ function Test-MeProduct {
         InstalledBuild   = $null
         AgentVersion     = $null
         LicenseType      = $null
+        Architecture     = $null
+        Source           = $null
         LatestVersion    = [string](Get-ConfigValue -Object $Product -Name 'latestVersion' -Default '')
         LatestBuild      = [string](Get-ConfigValue -Object $Product -Name 'latestBuild'   -Default '')
         Status           = 'Unknown'
@@ -495,8 +628,47 @@ function Test-MeProduct {
         CheckedAt        = (Get-Date)
     }
 
+    # ---- Source 1: conf\product.conf on the local install -------------------
+    # Cheapest and most reliable: no token, no API permission, no running web service.
+    if (-not $SkipLocal) {
+        $confPath = Get-ProductConfPath -Product $Product -Name $name
+        if ($confPath) {
+            Write-Verbose "[$name] reading $confPath"
+            $conf = Read-ProductConf -Path $confPath
+
+            if ($conf -and ($conf.Build -or $conf.Version)) {
+                $record.Reachable        = $true
+                $record.InstalledVersion = $conf.Version
+                $record.InstalledBuild   = $conf.Build
+                $record.Architecture     = $conf.Architecture
+                $record.Source           = "product.conf ($confPath)"
+                $record.EndpointUsed     = $confPath
+
+                # A build number without a version still identifies the release.
+                if (-not $record.InstalledVersion -and $record.InstalledBuild) {
+                    $record.InstalledVersion = ''
+                }
+
+                $record.Status = Get-VersionStatus -Installed $record.InstalledVersion -Latest $record.LatestVersion
+                $record.BuildStatus = Get-VersionStatus -Installed $record.InstalledBuild -Latest $record.LatestBuild
+                if ($record.Status -eq 'UpToDate' -and $record.BuildStatus -eq 'Outdated') {
+                    $record.Status = 'Outdated'
+                }
+                if ($record.Status -eq 'Unknown' -and $record.BuildStatus -ne 'Unknown') {
+                    $record.Status = $record.BuildStatus
+                }
+                return $record
+            }
+            Write-Verbose "[$name] product.conf held no build or version field"
+        }
+        else {
+            Write-Verbose "[$name] no product.conf found locally, falling back to the API"
+        }
+    }
+
+    # ---- Source 2: the product REST API -------------------------------------
     if ([string]::IsNullOrWhiteSpace($baseUrl)) {
-        $record.Error = 'No baseUrl configured'
+        $record.Error = 'No product.conf found locally and no baseUrl configured'
         return $record
     }
 
@@ -547,6 +719,7 @@ function Test-MeProduct {
         $record.AgentVersion     = Find-JsonValue -Node $call.Data -Names $script:AgentVersionKeys
         $record.LicenseType      = Find-JsonValue -Node $call.Data -Names $script:LicenseTypeKeys
         $record.EndpointUsed     = [string]$endpoint
+        $record.Source           = "REST API ($endpoint)"
         break
     }
 
@@ -634,16 +807,20 @@ function New-MeHtmlReport {
         if ([string]::IsNullOrWhiteSpace($latestBuild)) { $latestBuild = '-' }
         $licenseType = $r.LicenseType
         if ([string]::IsNullOrWhiteSpace($licenseType)) { $licenseType = '-' }
+        $architecture = $r.Architecture
+        if ([string]::IsNullOrWhiteSpace($architecture)) { $architecture = '-' }
 
-        $detail = $r.EndpointUsed
+        $detail = $r.Source
+        if ([string]::IsNullOrWhiteSpace($detail)) { $detail = $r.EndpointUsed }
         if (-not $r.Reachable) { $detail = $r.Error }
         if ([string]::IsNullOrWhiteSpace($detail)) { $detail = '-' }
 
         $row = @"
       <tr>
         <td class="product">$(ConvertTo-HtmlText $r.Name)<span class="url">$(ConvertTo-HtmlText $r.BaseUrl)</span></td>
-        <td>$(ConvertTo-HtmlText $installed)</td>
+        <td class="version">$(ConvertTo-HtmlText $installed)</td>
         <td>$(ConvertTo-HtmlText $installedBuild)</td>
+        <td>$(ConvertTo-HtmlText $architecture)</td>
         <td>$(ConvertTo-HtmlText $licenseType)</td>
         <td>$(ConvertTo-HtmlText $latest)</td>
         <td>$(ConvertTo-HtmlText $latestBuild)</td>
@@ -734,6 +911,7 @@ function New-MeHtmlReport {
   .badge.error { color: var(--error); border-color: var(--error); }
   .badge.info { color: var(--info); border-color: var(--info); }
   .badge.unknown { color: var(--muted); border-color: var(--muted); }
+  td.version { font-weight: 700; font-size: 15px; }
   footer { color: var(--muted); font-size: 12px; margin-top: 20px; }
 </style>
 </head>
@@ -756,11 +934,12 @@ function New-MeHtmlReport {
           <th>Product</th>
           <th>Installed version</th>
           <th>Installed build</th>
+          <th>Arch</th>
           <th>Licence</th>
           <th>Reference version</th>
           <th>Reference build</th>
           <th>Status</th>
-          <th>Endpoint / error</th>
+          <th>Source / error</th>
         </tr>
       </thead>
       <tbody>
@@ -849,15 +1028,16 @@ $results = New-Object System.Collections.ArrayList
 foreach ($productEntry in $selected) {
     $productName = [string](Get-ConfigValue -Object $productEntry -Name 'name' -Default 'Unknown product')
     Write-Host "Checking $productName ..."
-    $record = Test-MeProduct -Product $productEntry -TimeoutSec $timeout
+    $record = Test-MeProduct -Product $productEntry -TimeoutSec $timeout -SkipLocal:$SkipLocal
     [void]$results.Add($record)
 
     if ($record.Reachable) {
         Write-Host ("  version {0} (build {1}) - {2}" -f `
             $record.InstalledVersion, $record.InstalledBuild, (Get-StatusLabel -Status $record.Status))
+        if ($record.Architecture) { Write-Host ("  architecture: {0}"  -f $record.Architecture) }
         if ($record.LicenseType)  { Write-Host ("  licence: {0}"       -f $record.LicenseType) }
         if ($record.AgentVersion) { Write-Host ("  agent version: {0}" -f $record.AgentVersion) }
-        Write-Verbose ("  endpoint: {0}" -f $record.EndpointUsed)
+        Write-Host   ("  source: {0}" -f $record.Source) -ForegroundColor DarkGray
     } else {
         # Name the product: Write-Warning prefixes "WARNING:" and PowerShell may wrap the
         # line, which visually detaches it from the "Checking <name> ..." line above.

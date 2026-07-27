@@ -2,8 +2,16 @@
 
 Current version: see [`VERSION`](VERSION).
 
-Queries the REST API of ManageEngine products, extracts the installed version/build,
-compares it to a reference version from the config, and writes a self-contained HTML report.
+Reads the installed version/build of ManageEngine products, compares it to a reference
+version from the config, and writes a self-contained HTML report.
+
+Two sources are used, in order:
+
+1. **`conf\product.conf`** in the product installation folder, where ManageEngine writes
+   `product.build_number` and `product.processor_architecture`. This needs no token, no API
+   permission and no running web service, so it is tried first and is the most reliable route.
+2. **The REST API**, when no `product.conf` is found - for example when checking a remote
+   server. This is where `baseUrl`, `endpoints` and the token come in.
 
 Products covered by the sample config:
 
@@ -27,7 +35,8 @@ Products covered by the sample config:
    | Field | What it is |
    |---|---|
    | `name` | Display name shown in the report |
-   | `baseUrl` | Scheme, host and web port of the product (e.g. `https://adaudit.corp.local:8081`) |
+   | `installPath` | Installation folder, e.g. `C:\ManageEngine\Key Manager Plus`. `conf\product.conf` under it is read first |
+   | `baseUrl` | Scheme, host and web port of the product - only needed when there is no local install to read |
    | `tokenEnvVar` | Name of the environment variable holding that product's token |
    | `endpoints` | API paths to try, in order; the first one that returns a version wins |
    | `latestVersion` / `latestBuild` | Reference values to compare against - **optional**, see below |
@@ -75,11 +84,11 @@ Products covered by the sample config:
 ## Run
 
 Inside the distributed ZIP the script carries its version in the filename
-(`Get-ManageEngineVersions-v1.3.0.ps1`) so it is clear which build is being run; in this
+(`Get-ManageEngineVersions-v1.4.0.ps1`) so it is clear which build is being run; in this
 repository it keeps the plain name. Either way it prints its version on startup:
 
 ```
-VersionTool v1.3.0 - Get-ManageEngineVersions-v1.3.0.ps1
+VersionTool v1.4.0 - Get-ManageEngineVersions-v1.4.0.ps1
 ```
 
 ```powershell
@@ -94,6 +103,8 @@ Options:
 - `-Verbose` - log every endpoint that is tried
 - `-Product <name>` - check only the named product(s); a partial name is enough, e.g.
   `-Product "Key Manager"`. Accepts several: `-Product "Key Manager","ADAudit"`
+- `-SkipLocal` - ignore `conf\product.conf` and go to the REST API instead. Use when checking
+  a remote server, or to verify that the configured API path actually works
 
 ## Checking only the products you have installed
 
