@@ -85,7 +85,7 @@ Options:
 Typical output:
 
 ```
-VersionTool v3.0.0 - Get-ManageEngineVersions-v3.0.0.ps1
+VersionTool v3.0.1 - Get-ManageEngineVersions-v3.0.1.ps1
 Scanning KMP01 ...
   ManageEngine KeyManager Plus - version 7.1.2 (build 7120)
     \\KMP01\C$\Program Files\ManageEngine\KeyManager\conf\product.conf
