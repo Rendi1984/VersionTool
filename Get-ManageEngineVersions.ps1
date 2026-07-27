@@ -13,9 +13,17 @@
             product.build_number=7120
             product.processor_architecture=64
 
-    The script scans the ManageEngine installation roots on each configured server for
-    that file and reports whatever it finds - no product list to maintain, and a product
-    installed later shows up on its own.
+    A product counts as installed when such a file is found. The script looks for it in
+    three ways:
+
+      1. Under the conventional ManageEngine installation roots (C:\ManageEngine,
+         C:\Program Files\ManageEngine and so on), plus anything in "searchRoots".
+      2. For the local machine, the InstallLocation of any uninstall-registry entry
+         published by ManageEngine or ZOHO.
+      3. For the local machine, the binary path of any installed service that runs from
+         a ManageEngine folder.
+
+    No product list to maintain, and a product installed later shows up on its own.
 
     Settings live in config.json next to the script. It is read as it is; the script never
     rewrites it. Without one, the local machine is inventoried.
@@ -64,6 +72,7 @@ param(
     [string[]]$ComputerName,
     [string[]]$Product,
     [string]$OutputPath,
+    [string]$Title,
     [switch]$Show
 )
 
@@ -291,6 +300,63 @@ function Get-HighestBuildInFolder {
     return $best
 }
 
+function Get-LocalInstallHints {
+    <#
+        Folders that Windows itself says hold a ManageEngine product, for installations
+        outside the conventional roots. Two independent sources:
+
+          1. The uninstall registry - InstallLocation of any entry whose DisplayName or
+             Publisher mentions ManageEngine or ZOHO.
+          2. Installed services - most products register one, and the service binary path
+             points into the installation folder.
+
+        Local machine only: both need remote registry / RPC to work across the network,
+        which is a heavier dependency than the SMB file read this tool is built on.
+    #>
+    $hints = New-Object System.Collections.ArrayList
+
+    $uninstallKeys = @(
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+        'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+    )
+    foreach ($keyPath in $uninstallKeys) {
+        try {
+            $entries = Get-ItemProperty -Path $keyPath -ErrorAction SilentlyContinue
+        }
+        catch { continue }
+
+        foreach ($entry in @($entries)) {
+            $name      = [string](Get-ConfigValue -Object $entry -Name 'DisplayName')
+            $publisher = [string](Get-ConfigValue -Object $entry -Name 'Publisher')
+            $location  = [string](Get-ConfigValue -Object $entry -Name 'InstallLocation')
+
+            if (-not $location) { continue }
+            if ($name -notmatch '(?i)manage\s*engine|zoho' -and
+                $publisher -notmatch '(?i)manage\s*engine|zoho') { continue }
+
+            [void]$hints.Add($location.TrimEnd('\'))
+        }
+    }
+
+    try {
+        $services = Get-CimInstance -ClassName Win32_Service -ErrorAction Stop |
+                    Where-Object { $_.PathName -match '(?i)manageengine' }
+    }
+    catch {
+        Write-Verbose "Could not enumerate services: $($_.Exception.Message)"
+        $services = @()
+    }
+
+    foreach ($service in @($services)) {
+        # PathName looks like: "C:\Program Files\ManageEngine\KeyManager\bin\wrapper.exe" -s ...
+        $path = [string]$service.PathName
+        $match = [regex]::Match($path, '(?i)([A-Z]:\\[^"]*?ManageEngine\\[^\\"]+)')
+        if ($match.Success) { [void]$hints.Add($match.Groups[1].Value.TrimEnd('\')) }
+    }
+
+    return ($hints | Sort-Object -Unique)
+}
+
 # ---------------------------------------------------------------------------
 # Per-server scan
 # ---------------------------------------------------------------------------
@@ -362,6 +428,59 @@ function Get-MeProductsOnServer {
             }
 
             [void]$results.Add($record)
+        }
+    }
+
+    # Windows itself may know about an install outside the conventional roots.
+    if ($Computer -eq $env:COMPUTERNAME -or $Computer -eq 'localhost' -or $Computer -eq '.') {
+        $seen = @{}
+        foreach ($r in $results) {
+            if ($r.InstallPath) { $seen[([string]$r.InstallPath).ToLower().TrimEnd('\')] = $true }
+        }
+
+        foreach ($hint in (Get-LocalInstallHints)) {
+            if ($seen.ContainsKey($hint.ToLower())) { continue }
+
+            $confFolder = Join-Path $hint 'conf'
+            $confPath   = Join-Path $confFolder 'product.conf'
+            if (-not (Test-Path -LiteralPath $confPath)) { continue }
+
+            $conf = Read-ProductConf -Path $confPath
+            if (-not $conf -or (-not $conf.Build -and -not $conf.Version)) { continue }
+
+            Write-Verbose "[$Computer] found via registry/services: $hint"
+            $rootsSeen++
+
+            $displayName = $conf.ProductName
+            if ([string]::IsNullOrWhiteSpace($displayName)) { $displayName = Split-Path -Leaf $hint }
+
+            $record = [pscustomobject]@{
+                Server       = $Computer
+                Name         = $displayName
+                FolderName   = (Split-Path -Leaf $hint)
+                Version      = $conf.Version
+                Build        = $conf.Build
+                Architecture = $conf.Architecture
+                InstallPath  = $hint
+                Source       = $confPath
+                Found        = $true
+                Error        = $null
+                CheckedAt    = (Get-Date)
+            }
+
+            $higher = Get-HighestBuildInFolder -ConfFolder $confFolder
+            if ($higher) {
+                $current = 0
+                [void][int]::TryParse(([string]$conf.Build).Trim(), [ref]$current)
+                if ($higher.BuildNumber -gt $current) {
+                    $record.Build = $higher.Build
+                    if ($higher.Version) { $record.Version = $higher.Version }
+                    $record.Source = $higher.Path
+                }
+            }
+
+            [void]$results.Add($record)
+            $seen[$hint.ToLower()] = $true
         }
     }
 
@@ -640,9 +759,11 @@ Write-Host ("VersionTool v{0} - {1}" -f $script:ToolVersion, $MyInvocation.MyCom
 
 $config = Import-MeConfig -Path $ConfigPath
 
-$title = $Title
-if ([string]::IsNullOrWhiteSpace($title)) {
-    $title = [string](Get-ConfigValue -Object $config -Name 'reportTitle' -Default 'ManageEngine Version Report')
+# Distinct name: PowerShell variable names are case-insensitive, so $title and $Title
+# would be the same variable and the parameter would be overwritten below.
+$reportTitle = $Title
+if ([string]::IsNullOrWhiteSpace($reportTitle)) {
+    $reportTitle = [string](Get-ConfigValue -Object $config -Name 'reportTitle' -Default 'ManageEngine Version Report')
 }
 
 $outFile = $OutputPath
@@ -695,7 +816,7 @@ foreach ($target in $targets) {
     }
 }
 
-$reportPath = New-MeHtmlReport -Results $results.ToArray() -Title $title -Path $outFile
+$reportPath = New-MeHtmlReport -Results $results.ToArray() -Title $reportTitle -Path $outFile
 Write-Host ""
 Write-Host "Report written to: $reportPath"
 

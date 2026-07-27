@@ -8,6 +8,24 @@ of each, and writes a self-contained HTML report grouped by server.
 There is no product list to maintain: every ManageEngine product found under the
 installation roots is reported, so one installed later shows up on its own.
 
+## How it knows a product is installed
+
+A product counts as installed when `conf\product.conf` is found under its folder. The script
+looks in three places, so an install outside the usual location is still picked up:
+
+| # | Source | Covers |
+|---|---|---|
+| 1 | The conventional roots - `C:\ManageEngine`, `C:\Program Files\ManageEngine`, the x86 and D:/E: equivalents - plus anything in `searchRoots` | Local and remote |
+| 2 | Uninstall registry: `InstallLocation` of any entry whose DisplayName or Publisher mentions ManageEngine or ZOHO | Local only |
+| 3 | Installed services: the binary path of any service running from a ManageEngine folder | Local only |
+
+Sources 2 and 3 need the registry and the service database, which are not available over a
+plain file share. **For a remote server only source 1 applies**, so an install in an unusual
+place on a remote machine has to be added to `searchRoots`.
+
+Nothing is inferred from the product being *running* - a stopped service still reports its
+version, because the answer comes from a file on disk.
+
 ## How the version is read
 
 ManageEngine products write their identity to a plain key=value file in the installation
@@ -96,7 +114,7 @@ is scanned.
 |---|---|
 | `reportTitle` | Heading of the report |
 | `outputPath` | Where the HTML is written; relative paths are next to the script |
-| `servers` | Servers to scan. Empty means the local machine |
+| `servers` | Servers to scan. **Empty (`[]`) means the machine the script runs on** - the normal setup when the tool sits on one of the product servers |
 | `searchRoots` | Extra folders to search, for installations outside the conventional locations, e.g. `["F:\\Apps\\ManageEngine"]` |
 
 Backslashes in JSON must be doubled.
