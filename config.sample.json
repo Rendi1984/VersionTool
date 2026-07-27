@@ -1,20 +1,11 @@
 {
   "reportTitle": "ManageEngine Version Report",
   "outputPath": "ManageEngine-Versions.html",
-  "timeoutSec": 30,
-  "skipCertificateCheck": true,
   "products": [
     {
       "name": "ADAudit Plus",
       "enabled": true,
       "installPath": "C:\\Program Files\\ManageEngine\\ADAuditPlus",
-      "baseUrl": "https://adaudit.corp.local:8081",
-      "tokenEnvVar": "ME_ADAUDIT_TOKEN",
-      "endpoints": [
-        "/api/json/aboutproduct",
-        "/api/json/admin/getProductDetails",
-        "/api/json/settings/serverinfo"
-      ],
       "latestVersion": "",
       "latestBuild": ""
     },
@@ -22,13 +13,6 @@
       "name": "ADSelfService Plus",
       "enabled": true,
       "installPath": "C:\\Program Files\\ManageEngine\\ADSelfService Plus",
-      "baseUrl": "https://adssp.corp.local:8888",
-      "tokenEnvVar": "ME_ADSSP_TOKEN",
-      "endpoints": [
-        "/RestAPI/BuildDetails",
-        "/api/json/aboutproduct",
-        "/RestAPI/WC/ProductDetails"
-      ],
       "latestVersion": "",
       "latestBuild": ""
     },
@@ -36,18 +20,8 @@
       "name": "Key Manager Plus",
       "enabled": true,
       "installPath": "C:\\Program Files\\ManageEngine\\KeyManager",
-      "baseUrl": "https://kmp.corp.local:6565",
-      "tokenEnvVar": "ME_KMP_TOKEN",
-      "endpoints": [
-        "/api/pki/restapi/getServerInfo",
-        "/api/pki/restapi/aboutProduct",
-        "/api/pki/restapi/getProductDetails",
-        "/api/json/aboutproduct",
-        "/restapi/json/v1/serverinfo"
-      ],
       "latestVersion": "",
-      "latestBuild": "",
-      "authMode": "path"
+      "latestBuild": ""
     }
   ]
 }

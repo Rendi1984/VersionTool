@@ -1,19 +1,22 @@
 # VersionTool - Project Rules for Claude
 
 ## What is this project
-VersionTool checks the installed version/build of ManageEngine products (ADAudit Plus,
-ADSelfService Plus, Key Manager Plus) through their REST APIs and renders a self-contained
-HTML report.
+VersionTool reports the installed version/build of ManageEngine products (ADAudit Plus,
+ADSelfService Plus, Key Manager Plus) by reading conf\product.conf from each installation
+folder, and renders a self-contained HTML report. There is no API/token path any more - it
+was removed in 2.0.0 because reading the file needs no token, no API permission and no
+running web service.
 
 - `Get-ManageEngineVersions.ps1` - the tool. Windows PowerShell 5.1 compatible; no PowerShell 7
   syntax (no `??`, no ternary, no `&&`/`||`, ASCII only).
 - `config.sample.json` - template config. Real config lives in `config.json`, which is
-  gitignored because it can hold API tokens.
+  gitignored.
 - `VERSION` - single source of truth for the release number. Patch for a fix, minor for a new
   capability.
 
-Tokens are supplied per product via environment variables named in `tokenEnvVar`
-(`ME_ADAUDIT_TOKEN`, `ME_ADSSP_TOKEN`, `ME_KMP_TOKEN`). Never commit a real token.
+Per product the config carries `name`, `installPath`, `enabled` and the optional
+`latestVersion`/`latestBuild` reference values. Never commit a real token or customer
+hostname.
 
 ---
 
@@ -41,9 +44,12 @@ Whenever files are produced for the user, all three of these are required - no e
 ---
 
 ## Notes
-- API paths differ between ManageEngine products and major versions, so `endpoints` is
-  config-driven and each path is tried in order until one returns a version. The version/build
-  value is located by searching the JSON response recursively (`product_version`, `version`,
-  `build_number`, ...), so a differently shaped response usually still parses.
+- The installer does not use the display name verbatim: Key Manager Plus installs into
+  `...\ManageEngine\KeyManager`. Folder discovery normalises names (lowercase, no separators,
+  no trailing "plus") rather than guessing spellings.
+- A service pack does not always rewrite `product.conf`; a live install reported build 7120
+  there while the console showed 7130. The script scans every `*.conf` in the `conf` folder and
+  reports the highest build, naming its source. Keep that caveat in the README - do not present
+  the number as authoritative.
 - Before shipping a change to the script, verify ASCII-only content and brace/paren balance.
 - This tool was originally committed to the DSMT-V2 repository by mistake and moved here.
