@@ -1,11 +1,17 @@
 # VersionTool - Project Rules for Claude
 
 ## What is this project
-VersionTool reports the installed version/build of ManageEngine products (ADAudit Plus,
-ADSelfService Plus, Key Manager Plus) by reading conf\product.conf from each installation
-folder, and renders a self-contained HTML report. There is no API/token path any more - it
-was removed in 2.0.0 because reading the file needs no token, no API permission and no
-running web service.
+VersionTool reports the installed version/build of infrastructure systems and renders a
+self-contained HTML report grouped by vendor, then by server.
+
+- **ManageEngine** - reads `conf\product.conf` from each installation folder. No credentials,
+  no API. Every product found is reported; there is no product list.
+- **VMware** - vCenter via the vSphere REST API, falling back to PowerCLI (which also yields
+  ESXi hosts). This one does need credentials and TCP 443, because a vCenter appliance has no
+  file share to read.
+
+Nothing is ever checked against a vendor's release page: the report says what is installed,
+never whether it is current. No reference versions, no status column.
 
 - `Get-ManageEngineVersions.ps1` - the tool. Windows PowerShell 5.1 compatible; no PowerShell 7
   syntax (no `??`, no ternary, no `&&`/`||`, ASCII only).
@@ -14,9 +20,10 @@ running web service.
 - `VERSION` - single source of truth for the release number. Patch for a fix, minor for a new
   capability.
 
-The config carries `reportTitle`, `outputPath`, a `servers` list (empty = local machine) and
-optional `searchRoots`. There is no product list: every ManageEngine product found under the
-installation roots is reported. Never commit a real customer hostname.
+The config carries `reportTitle`, `outputPath`, `servers` (empty = local machine),
+`searchRoots`, `vcenters` (empty = VMware skipped), `credentialFolder`,
+`skipCertificateCheck` and `timeoutSec`. Never commit a real customer hostname or credential;
+`credentials/` and `*.cred.xml` are gitignored.
 
 ---
 
@@ -50,5 +57,10 @@ Whenever files are produced for the user, all three of these are required - no e
   there while the console showed 7130. The script scans every `*.conf` in the `conf` folder and
   reports the highest build, naming its source. Keep that caveat in the README - do not present
   the number as authoritative.
-- Before shipping a change to the script, verify ASCII-only content and brace/paren balance.
+- Before shipping a change to the script, run `python3 tools/check-script.py`. There is no
+  PowerShell here, so it is the only automated guard: it catches script-scope variables read
+  but never set (a dropped parameter - this shipped three times), foreach variables colliding
+  with a parameter name (PowerShell names are case-insensitive), brace balance and non-ASCII.
+- Anything that would install software or store a credential must ask first, and declining
+  must skip that check rather than fail the run.
 - This tool was originally committed to the DSMT-V2 repository by mistake and moved here.

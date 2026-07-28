@@ -73,6 +73,9 @@ param(
     [string[]]$Product,
     [string]$OutputPath,
     [string]$Title,
+    [string[]]$VCenter,
+    [switch]$InstallPowerCLI,
+    [switch]$NonInteractive,
     [switch]$Show
 )
 
@@ -81,7 +84,7 @@ $ErrorActionPreference = 'Stop'
 
 # Keep in step with the VERSION file. Printed at startup and in the report so the running
 # copy identifies itself even if the file was renamed or copied elsewhere.
-$script:ToolVersion = '3.0.1'
+$script:ToolVersion = '3.1.0'
 
 # ---------------------------------------------------------------------------
 # Config
@@ -401,6 +404,7 @@ function Get-MeProductsOnServer {
             if ([string]::IsNullOrWhiteSpace($displayName)) { $displayName = $dir.Name }
 
             $record = [pscustomobject]@{
+                Vendor       = 'ManageEngine'
                 Server       = $Computer
                 Name         = $displayName
                 FolderName   = $dir.Name
@@ -455,6 +459,7 @@ function Get-MeProductsOnServer {
             if ([string]::IsNullOrWhiteSpace($displayName)) { $displayName = Split-Path -Leaf $hint }
 
             $record = [pscustomobject]@{
+                Vendor       = 'ManageEngine'
                 Server       = $Computer
                 Name         = $displayName
                 FolderName   = (Split-Path -Leaf $hint)
@@ -493,6 +498,7 @@ function Get-MeProductsOnServer {
         }
 
         [void]$results.Add([pscustomobject]@{
+            Vendor       = 'ManageEngine'
             Server       = $Computer
             Name         = 'No products found'
             FolderName   = $null
@@ -508,6 +514,363 @@ function Get-MeProductsOnServer {
     }
 
     return $results.ToArray()
+}
+
+# ---------------------------------------------------------------------------
+# VMware vCenter / ESXi
+#
+# A vCenter appliance has no C$ to read, so unlike ManageEngine this needs a network
+# call. Two routes, tried in order:
+#   1. The vSphere REST API - no module to install, just HTTPS 443.
+#   2. PowerCLI - only if REST fails, and only if the module is present or the user
+#      agrees to install it. Declining skips the check rather than failing the run.
+# ---------------------------------------------------------------------------
+function Initialize-CertificateBypass {
+    <#
+        vCenter ships a self-signed certificate. Windows PowerShell 5.1 has no
+        -SkipCertificateCheck, so the validation callback has to be replaced.
+    #>
+    if ('VtCertPolicy' -as [type]) { return }
+
+    Add-Type -TypeDefinition @'
+using System.Net;
+using System.Security.Cryptography.X509Certificates;
+public class VtCertPolicy : ICertificatePolicy {
+    public bool CheckValidationResult(ServicePoint sp, X509Certificate cert, WebRequest req, int problem) {
+        return true;
+    }
+}
+'@
+    [Net.ServicePointManager]::CertificatePolicy = New-Object VtCertPolicy
+    [Net.ServicePointManager]::SecurityProtocol = `
+        [Net.SecurityProtocolType]::Tls12 -bor [Net.ServicePointManager]::SecurityProtocol
+}
+
+function Get-CredentialStorePath {
+    param([string]$Server, [string]$Folder)
+
+    if ([string]::IsNullOrWhiteSpace($Folder)) {
+        $Folder = Join-Path (Get-ScriptDirectory) 'credentials'
+    }
+    $safe = ($Server -replace '[^A-Za-z0-9._-]', '_')
+    return (Join-Path $Folder "$safe.cred.xml")
+}
+
+function Resolve-VCenterCredential {
+    <#
+        Credentials for one vCenter, in order:
+          1. Environment variables VCENTER_USER / VCENTER_PASSWORD.
+          2. A DPAPI-encrypted file written by Export-Clixml. That encryption is tied to
+             the Windows account and machine that wrote it, so a scheduled task running
+             as the same account can read it and nobody else can.
+          3. An interactive prompt, offering to save the result as (2) for next time.
+
+        Returns $null when nothing is available and the session cannot prompt.
+    #>
+    param([string]$Server, [string]$CredentialFolder, [bool]$AllowPrompt)
+
+    $user = $env:VCENTER_USER
+    $pass = $env:VCENTER_PASSWORD
+    if ($user -and $pass) {
+        Write-Verbose "[$Server] using VCENTER_USER / VCENTER_PASSWORD"
+        $secure = ConvertTo-SecureString $pass -AsPlainText -Force
+        return (New-Object System.Management.Automation.PSCredential($user, $secure))
+    }
+
+    $storePath = Get-CredentialStorePath -Server $Server -Folder $CredentialFolder
+    if (Test-Path -LiteralPath $storePath) {
+        try {
+            Write-Verbose "[$Server] using stored credential $storePath"
+            return (Import-Clixml -LiteralPath $storePath)
+        }
+        catch {
+            Write-Warning "Could not read $storePath (it is tied to the account and machine that created it): $($_.Exception.Message)"
+        }
+    }
+
+    if (-not $AllowPrompt) { return $null }
+
+    Write-Host ""
+    Write-Host "Credentials are needed for vCenter $Server." -ForegroundColor Yellow
+    $credential = $null
+    try { $credential = Get-Credential -Message "vCenter $Server" }
+    catch { return $null }
+    if (-not $credential) { return $null }
+
+    $answer = Read-Host "Save this credential encrypted for future runs? [y/N]"
+    if ($answer -match '^(y|yes)$') {
+        try {
+            $dir = Split-Path -Parent $storePath
+            if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+            $credential | Export-Clixml -LiteralPath $storePath
+            Write-Host "Saved to $storePath (readable only by $env:USERNAME on $env:COMPUTERNAME)." -ForegroundColor Green
+        }
+        catch {
+            Write-Warning "Could not save the credential: $($_.Exception.Message)"
+        }
+    }
+
+    return $credential
+}
+
+function Get-VCenterVersionViaRest {
+    <#
+        vSphere REST. vCenter 7 and later serve /api/...; 6.7 serves /rest/...
+        Returns an object with Version, Build, Product and Source, or $null.
+    #>
+    param([string]$Server, $Credential, [int]$TimeoutSec)
+
+    $pair    = "$($Credential.UserName):$($Credential.GetNetworkCredential().Password)"
+    $basic   = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($pair))
+    $headers = @{ Authorization = "Basic $basic" }
+
+    $sessionEndpoints = @(
+        @{ Session = "https://$Server/api/session";                      Version = "https://$Server/api/appliance/system/version";                    Header = 'vmware-api-session-id' },
+        @{ Session = "https://$Server/rest/com/vmware/cis/session";      Version = "https://$Server/rest/appliance/system/version";                   Header = 'vmware-api-session-id' }
+    )
+
+    foreach ($endpoint in $sessionEndpoints) {
+        $token = $null
+        try {
+            $response = Invoke-RestMethod -Uri $endpoint.Session -Method Post -Headers $headers `
+                            -TimeoutSec $TimeoutSec -ErrorAction Stop
+            # /api returns the token as a bare string; /rest wraps it in .value
+            if ($response -is [string]) { $token = $response }
+            elseif ($response -and (Get-Member -InputObject $response -Name 'value')) { $token = [string]$response.value }
+        }
+        catch {
+            Write-Verbose "[$Server] $($endpoint.Session) failed: $($_.Exception.Message)"
+            continue
+        }
+
+        if (-not $token) { continue }
+
+        try {
+            $authHeader = @{ $endpoint.Header = $token }
+            $info = Invoke-RestMethod -Uri $endpoint.Version -Method Get -Headers $authHeader `
+                        -TimeoutSec $TimeoutSec -ErrorAction Stop
+
+            $data = $info
+            if ($info -and (Get-Member -InputObject $info -Name 'value')) { $data = $info.value }
+
+            $version = [string](Get-ConfigValue -Object $data -Name 'version')
+            $build   = [string](Get-ConfigValue -Object $data -Name 'build')
+            $product = [string](Get-ConfigValue -Object $data -Name 'product')
+
+            if ($version -or $build) {
+                return [pscustomobject]@{
+                    Version = $version
+                    Build   = $build
+                    Product = $(if ($product) { $product } else { 'VMware vCenter Server' })
+                    Source  = $endpoint.Version
+                }
+            }
+        }
+        catch {
+            Write-Verbose "[$Server] $($endpoint.Version) failed: $($_.Exception.Message)"
+        }
+        finally {
+            try { Invoke-RestMethod -Uri $endpoint.Session -Method Delete -Headers @{ $endpoint.Header = $token } -TimeoutSec $TimeoutSec -ErrorAction SilentlyContinue | Out-Null }
+            catch { }
+        }
+    }
+
+    return $null
+}
+
+function Test-PowerCLIAvailable {
+    <#
+        Is PowerCLI usable? If not, ask before installing anything - an unattended run or
+        a declined prompt skips the PowerCLI route instead of failing.
+    #>
+    param([bool]$AllowPrompt, [bool]$AutoInstall)
+
+    if (Get-Module -ListAvailable -Name 'VMware.VimAutomation.Core') { return $true }
+
+    if (-not $AutoInstall) {
+        if (-not $AllowPrompt) {
+            Write-Verbose 'PowerCLI is not installed and this session cannot prompt - skipping the PowerCLI route.'
+            return $false
+        }
+
+        Write-Host ""
+        Write-Host 'The REST API did not answer, and VMware PowerCLI is not installed on this machine.' -ForegroundColor Yellow
+        Write-Host 'It can be installed for the current user from the PowerShell Gallery (a few hundred MB,'
+        Write-Host 'and it needs internet access to the Gallery).'
+        $answer = Read-Host 'Install VMware PowerCLI now? [y/N]'
+        if ($answer -notmatch '^(y|yes)$') {
+            Write-Host 'Skipping the VMware check.' -ForegroundColor DarkGray
+            return $false
+        }
+    }
+
+    try {
+        Write-Host 'Installing VMware.PowerCLI for the current user ...' -ForegroundColor Cyan
+        Install-Module -Name VMware.PowerCLI -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
+        return $true
+    }
+    catch {
+        Write-Warning "PowerCLI installation failed: $($_.Exception.Message)"
+        return $false
+    }
+}
+
+function Get-VMwareInventoryViaPowerCLI {
+    <#
+        Falls back to PowerCLI, which also yields the ESXi hosts - the REST route above
+        only covers the vCenter appliance itself.
+        Returns an array of records, or $null when PowerCLI could not be used.
+    #>
+    param([string]$Server, $Credential, [bool]$SkipCertificateCheck)
+
+    try {
+        Import-Module VMware.VimAutomation.Core -ErrorAction Stop
+    }
+    catch {
+        Write-Warning "Could not load PowerCLI: $($_.Exception.Message)"
+        return $null
+    }
+
+    try {
+        if ($SkipCertificateCheck) {
+            Set-PowerCLIConfiguration -InvalidCertificateAction Ignore -Confirm:$false -Scope Session | Out-Null
+        }
+        Set-PowerCLIConfiguration -ParticipateInCeip $false -Confirm:$false -Scope Session -ErrorAction SilentlyContinue | Out-Null
+    }
+    catch { }
+
+    $connection = $null
+    try {
+        $connection = Connect-VIServer -Server $Server -Credential $Credential -ErrorAction Stop
+    }
+    catch {
+        Write-Warning "PowerCLI could not connect to ${Server}: $($_.Exception.Message)"
+        return $null
+    }
+
+    $records = New-Object System.Collections.ArrayList
+    try {
+        [void]$records.Add([pscustomobject]@{
+            Vendor       = 'VMware'
+            Server       = $Server
+            Name         = 'VMware vCenter Server'
+            FolderName   = $null
+            Version      = [string]$connection.Version
+            Build        = [string]$connection.Build
+            Architecture = $null
+            InstallPath  = $null
+            Source       = "PowerCLI Connect-VIServer $Server"
+            Found        = $true
+            Error        = $null
+            CheckedAt    = (Get-Date)
+        })
+
+        try {
+            $hosts = Get-VMHost -ErrorAction Stop
+        }
+        catch {
+            Write-Verbose "[$Server] could not list ESXi hosts: $($_.Exception.Message)"
+            $hosts = @()
+        }
+
+        foreach ($esx in @($hosts)) {
+            [void]$records.Add([pscustomobject]@{
+                Vendor       = 'VMware'
+                Server       = $Server
+                Name         = "ESXi - $($esx.Name)"
+                FolderName   = $null
+                Version      = [string]$esx.Version
+                Build        = [string]$esx.Build
+                Architecture = $null
+                InstallPath  = $null
+                Source       = "PowerCLI Get-VMHost on $Server"
+                Found        = $true
+                Error        = $null
+                CheckedAt    = (Get-Date)
+            })
+        }
+    }
+    finally {
+        try { Disconnect-VIServer -Server $connection -Confirm:$false -ErrorAction SilentlyContinue | Out-Null }
+        catch { }
+    }
+
+    return $records.ToArray()
+}
+
+function Get-VMwareVersions {
+    <#
+        One vCenter: REST first, PowerCLI second. Always returns at least one record so
+        an unreachable vCenter is visible in the report rather than silently absent.
+    #>
+    param(
+        [string]$Server,
+        [string]$CredentialFolder,
+        [bool]$SkipCertificateCheck,
+        [int]$TimeoutSec,
+        [bool]$AllowPrompt,
+        [bool]$AutoInstallPowerCLI
+    )
+
+    if ($SkipCertificateCheck) { Initialize-CertificateBypass }
+
+    $credential = Resolve-VCenterCredential -Server $Server -CredentialFolder $CredentialFolder -AllowPrompt $AllowPrompt
+    if (-not $credential) {
+        return @([pscustomobject]@{
+            Vendor       = 'VMware'
+            Server       = $Server
+            Name         = 'vCenter'
+            FolderName   = $null
+            Version      = $null
+            Build        = $null
+            Architecture = $null
+            InstallPath  = $null
+            Source       = $null
+            Found        = $false
+            Error        = 'No credentials available. Set VCENTER_USER and VCENTER_PASSWORD, or run interactively once to store an encrypted credential.'
+            CheckedAt    = (Get-Date)
+        })
+    }
+
+    $rest = Get-VCenterVersionViaRest -Server $Server -Credential $credential -TimeoutSec $TimeoutSec
+    if ($rest) {
+        return @([pscustomobject]@{
+            Vendor       = 'VMware'
+            Server       = $Server
+            Name         = $rest.Product
+            FolderName   = $null
+            Version      = $rest.Version
+            Build        = $rest.Build
+            Architecture = $null
+            InstallPath  = $null
+            Source       = $rest.Source
+            Found        = $true
+            Error        = $null
+            CheckedAt    = (Get-Date)
+        })
+    }
+
+    Write-Verbose "[$Server] REST returned no version - trying PowerCLI"
+
+    if (Test-PowerCLIAvailable -AllowPrompt $AllowPrompt -AutoInstall $AutoInstallPowerCLI) {
+        $viaPowerCli = Get-VMwareInventoryViaPowerCLI -Server $Server -Credential $credential -SkipCertificateCheck $SkipCertificateCheck
+        if ($viaPowerCli) { return $viaPowerCli }
+    }
+
+    return @([pscustomobject]@{
+        Vendor       = 'VMware'
+        Server       = $Server
+        Name         = 'vCenter'
+        FolderName   = $null
+        Version      = $null
+        Build        = $null
+        Architecture = $null
+        InstallPath  = $null
+        Source       = $null
+        Found        = $false
+        Error        = "Neither the REST API nor PowerCLI returned a version. Check that https://$Server is reachable on TCP 443, that the credentials are valid, and run with -Verbose to see each attempt."
+        CheckedAt    = (Get-Date)
+    })
 }
 
 # ---------------------------------------------------------------------------
@@ -536,9 +899,15 @@ function New-MeHtmlReport {
     $installed = @($Results | Where-Object { $_.Found }).Count
     $servers   = @($Results | ForEach-Object { $_.Server } | Sort-Object -Unique).Count
     $failed    = @($Results | Where-Object { -not $_.Found }).Count
+    $vendors   = @($Results | ForEach-Object { $_.Vendor } | Sort-Object -Unique).Count
 
-    # One block per server: in production each product tends to have its own machine.
-    $groups = $Results | Group-Object -Property Server | Sort-Object Name
+    # One region per vendor, subdivided by server: in production each product tends to
+    # have its own machine.
+    $vendorBlocks = New-Object System.Collections.ArrayList
+
+    foreach ($vendorGroup in ($Results | Group-Object -Property Vendor | Sort-Object Name)) {
+
+    $groups = $vendorGroup.Group | Group-Object -Property Server | Sort-Object Name
 
     $sections = New-Object System.Collections.ArrayList
     foreach ($group in $groups) {
@@ -611,6 +980,23 @@ $rowsHtml
     }
 
     $sectionsHtml = ($sections -join "`r`n")
+
+    $vendorInstalled = @($vendorGroup.Group | Where-Object { $_.Found }).Count
+    $vendorServers   = @($vendorGroup.Group | ForEach-Object { $_.Server } | Sort-Object -Unique).Count
+
+    $vendorBlock = @"
+  <div class="vendor">
+    <div class="vendor-head">
+      <span class="title">$(ConvertTo-HtmlText $vendorGroup.Name)</span>
+      <span class="meta">$vendorInstalled item(s) across $vendorServers server(s)</span>
+    </div>
+$sectionsHtml
+  </div>
+"@
+        [void]$vendorBlocks.Add($vendorBlock)
+    }
+
+    $vendorsHtml = ($vendorBlocks -join "`r`n")
 
     $html = @"
 <!DOCTYPE html>
@@ -718,23 +1104,19 @@ $rowsHtml
   <div class="sub-line">Generated $generated on $(ConvertTo-HtmlText $env:COMPUTERNAME) by VersionTool v$(ConvertTo-HtmlText $script:ToolVersion)</div>
 
   <div class="cards">
-    <div class="card ok"><div class="n">$installed</div><div class="l">Products installed</div></div>
-    <div class="card"><div class="n">$servers</div><div class="l">Servers scanned</div></div>
-    <div class="card error"><div class="n">$failed</div><div class="l">Servers with no result</div></div>
+    <div class="card ok"><div class="n">$installed</div><div class="l">Items found</div></div>
+    <div class="card"><div class="n">$vendors</div><div class="l">Vendors</div></div>
+    <div class="card"><div class="n">$servers</div><div class="l">Servers queried</div></div>
+    <div class="card error"><div class="n">$failed</div><div class="l">With no result</div></div>
   </div>
 
-  <div class="vendor">
-    <div class="vendor-head">
-      <span class="title">ManageEngine</span>
-      <span class="meta">$installed product(s) across $servers server(s)</span>
-    </div>
-$sectionsHtml
-  </div>
+$vendorsHtml
 
   <footer>
-    Versions are read from conf\product.conf in each installation folder. Nothing is queried
-    over the internet, so no outbound firewall rule is required; reading a remote server uses
-    SMB (TCP 445) to its administrative share.
+    ManageEngine versions are read from conf\product.conf on disk (SMB, TCP 445 for a remote
+    server). VMware versions come from the vSphere REST API, or PowerCLI when REST does not
+    answer (HTTPS, TCP 443). Nothing is checked against the vendors' release pages, so no
+    internet access is required and no row claims to know whether a newer release exists.
     A service pack does not always rewrite product.conf, so verify against the product console
     when the exact patch level matters.
   </footer>
@@ -812,6 +1194,51 @@ foreach ($target in $targets) {
         }
         else {
             Write-Warning ("{0}: {1}" -f $target, $record.Error)
+        }
+    }
+}
+
+# ---- VMware ----------------------------------------------------------------
+$vCenters = @($VCenter)
+if ($vCenters.Count -eq 0) {
+    $vCenters = @(Get-ConfigValue -Object $config -Name 'vcenters' -Default @())
+}
+$vCenters = @($vCenters | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+
+if ($vCenters.Count -gt 0) {
+    $credentialFolder = [string](Get-ConfigValue -Object $config -Name 'credentialFolder' -Default '')
+    $skipCert         = [bool](Get-ConfigValue -Object $config -Name 'skipCertificateCheck' -Default $true)
+    $timeoutSec       = [int](Get-ConfigValue -Object $config -Name 'timeoutSec' -Default 30)
+    $allowPrompt      = -not $NonInteractive
+
+    foreach ($vc in $vCenters) {
+        Write-Host "Querying vCenter $vc ..."
+
+        $vmwareRecords = Get-VMwareVersions -Server ([string]$vc) `
+                            -CredentialFolder $credentialFolder `
+                            -SkipCertificateCheck $skipCert `
+                            -TimeoutSec $timeoutSec `
+                            -AllowPrompt $allowPrompt `
+                            -AutoInstallPowerCLI ([bool]$InstallPowerCLI)
+
+        foreach ($record in $vmwareRecords) {
+            if ($record.Found -and $Product -and @($Product).Count -gt 0) {
+                $matched = $false
+                foreach ($wanted in $Product) {
+                    if ($record.Name -like ('*' + [string]$wanted + '*')) { $matched = $true; break }
+                }
+                if (-not $matched) { continue }
+            }
+
+            [void]$results.Add($record)
+
+            if ($record.Found) {
+                Write-Host ("  {0} - version {1} (build {2})" -f $record.Name, $record.Version, $record.Build)
+                Write-Host ("    {0}" -f $record.Source) -ForegroundColor DarkGray
+            }
+            else {
+                Write-Warning ("{0}: {1}" -f $vc, $record.Error)
+            }
         }
     }
 }

@@ -1,1 +1,3 @@
 *.html
+credentials/
+*.cred.xml

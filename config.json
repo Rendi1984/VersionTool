@@ -1,6 +1,10 @@
 {
-  "reportTitle": "ManageEngine Version Report",
-  "outputPath": "ManageEngine-Versions.html",
+  "reportTitle": "Infrastructure Version Report",
+  "outputPath": "Version-Report.html",
   "servers": [],
-  "searchRoots": []
+  "searchRoots": [],
+  "vcenters": [],
+  "credentialFolder": "",
+  "skipCertificateCheck": true,
+  "timeoutSec": 30
 }

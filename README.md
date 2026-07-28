@@ -1,12 +1,19 @@
-# VersionTool - ManageEngine version inventory
+# VersionTool - infrastructure version inventory
 
 Current version: see [`VERSION`](VERSION).
 
-Scans one or more servers for installed ManageEngine products, reads the version and build
-of each, and writes a self-contained HTML report grouped by server.
+Collects the installed version and build of the systems in the environment and writes a
+self-contained HTML report, grouped by vendor and then by server.
 
-There is no product list to maintain: every ManageEngine product found under the
-installation roots is reported, so one installed later shows up on its own.
+Supported today:
+
+| Vendor | Covers | How |
+|---|---|---|
+| **ManageEngine** | Every product found - ADAudit Plus, ADSelfService Plus, Key Manager Plus, ADManager Plus, ... | Reads `conf\product.conf` on disk. No credentials |
+| **VMware** | vCenter Server, and the ESXi hosts it manages | vSphere REST API, falling back to PowerCLI. Needs credentials |
+
+There is no ManageEngine product list to maintain: everything found under the installation
+roots is reported, so a product installed later shows up on its own.
 
 ## How it knows a product is installed
 
@@ -79,8 +86,11 @@ Options:
 - `-OutputPath <path>` - where to write the HTML
 - `-Product <name>` - report only products whose name contains this string
 - `-Title <text>` - heading for the report
+- `-VCenter <names>` - vCenter servers to query, overriding the config
+- `-InstallPowerCLI` - agree up front to installing PowerCLI if the REST route fails
+- `-NonInteractive` - never prompt and never install; skip anything that would need it
 - `-Show` - open the report when finished
-- `-Verbose` - log every root scanned and file read
+- `-Verbose` - log every root scanned, file read and API call attempted
 
 Typical output:
 
@@ -103,10 +113,14 @@ is scanned.
 
 ```json
 {
-  "reportTitle": "ManageEngine Version Report",
-  "outputPath": "ManageEngine-Versions.html",
+  "reportTitle": "Infrastructure Version Report",
+  "outputPath": "Version-Report.html",
   "servers": ["KMP01", "ADAUDIT01", "ADSSP01"],
-  "searchRoots": []
+  "searchRoots": [],
+  "vcenters": ["vcenter01.lab.local"],
+  "credentialFolder": "",
+  "skipCertificateCheck": true,
+  "timeoutSec": 30
 }
 ```
 
@@ -116,6 +130,10 @@ is scanned.
 | `outputPath` | Where the HTML is written; relative paths are next to the script |
 | `servers` | Servers to scan. **Empty (`[]`) means the machine the script runs on** - the normal setup when the tool sits on one of the product servers |
 | `searchRoots` | Extra folders to search, for installations outside the conventional locations, e.g. `["F:\\Apps\\ManageEngine"]` |
+| `vcenters` | vCenter hostnames to query. Empty means VMware is skipped entirely |
+| `credentialFolder` | Where encrypted vCenter credentials are stored. Empty means `credentials\` next to the script |
+| `skipCertificateCheck` | Accept vCenter's self-signed certificate. Default `true` |
+| `timeoutSec` | Per REST call. Default 30 |
 
 Backslashes in JSON must be doubled.
 
@@ -125,9 +143,12 @@ Roots searched by default: `C:\ManageEngine`, `C:\Program Files\ManageEngine`,
 
 ## The report
 
-One block for ManageEngine, subdivided by server, with a row per product: name, version,
-build, architecture and the file the values came from. Summary cards at the top count
-products, servers scanned, and servers that returned nothing.
+One region per vendor - ManageEngine, VMware - each subdivided by server, with a row per
+item: name, version, build, architecture and where the values came from. Summary cards at the
+top count items found, vendors, servers queried and anything that returned nothing.
+
+Nothing in the report claims to know whether a newer release exists: there is no reference
+version and no status column, because the tool never contacts the vendors.
 
 ## Caveat: product.conf can lag behind a service pack
 
@@ -171,6 +192,76 @@ after an edit. The script names the offending line.
 
 - Written for Windows PowerShell 5.1; no PowerShell 7 syntax is used.
 - The script only reads files - it never writes to a product installation.
+
+## VMware / vCenter
+
+A vCenter appliance has no `C$` to read - it runs Photon Linux - so unlike ManageEngine this
+needs a network call and credentials.
+
+```powershell
+.\Get-ManageEngineVersions.ps1 -VCenter vcenter01.lab.local -Show
+```
+
+or in `config.json`:
+
+```json
+"vcenters": ["vcenter01.lab.local"]
+```
+
+### How the version is obtained
+
+1. **vSphere REST API** (tried first) - `POST /api/session` for a token, then
+   `GET /api/appliance/system/version`. vCenter 6.7 serves the same thing under `/rest/...`,
+   which is tried as well. Nothing to install; HTTPS on TCP 443 is enough.
+2. **PowerCLI** (only if REST returns nothing) - `Connect-VIServer`, which additionally yields
+   every **ESXi host** with its own version and build.
+
+If PowerCLI is not installed, the script asks before installing anything:
+
+```
+The REST API did not answer, and VMware PowerCLI is not installed on this machine.
+It can be installed for the current user from the PowerShell Gallery (a few hundred MB,
+and it needs internet access to the Gallery).
+Install VMware PowerCLI now? [y/N]
+```
+
+Answering no **skips the VMware check** and the rest of the report is produced as usual.
+`-InstallPowerCLI` answers yes up front; `-NonInteractive` never prompts and never installs,
+which is what a scheduled task wants.
+
+### Credentials
+
+Resolved in this order:
+
+1. `VCENTER_USER` and `VCENTER_PASSWORD` environment variables.
+2. A **DPAPI-encrypted file** under `credentials\` next to the script. Windows ties the
+   encryption to the account and machine that wrote it, so nobody else can read it - not even
+   another administrator on the same box.
+3. An **interactive prompt**, which offers to save the result as (2) for next time.
+
+The recommended setup is to run it interactively once and answer yes to saving, then let the
+scheduled task run unattended as the same account. Read-only vCenter permissions are enough.
+
+The `credentials\` folder and `*.cred.xml` are gitignored.
+
+### Firewall for VMware
+
+| From | To | Port |
+|---|---|---|
+| The machine running the script | vCenter | **TCP 443** |
+| The machine running the script | PowerShell Gallery | TCP 443, **only** if you choose to install PowerCLI |
+
+Still nothing checks the vendors' release pages, so a disconnected environment works as long
+as vCenter itself is reachable.
+
+`skipCertificateCheck` in the config defaults to `true`, because vCenter ships a self-signed
+certificate. Set it to `false` once vCenter carries a trusted certificate.
+
+### ESXi hosts
+
+ESXi versions come from PowerCLI's `Get-VMHost`, so they appear only when the PowerCLI route
+runs. When REST answers, the report shows the vCenter appliance alone - which is the common
+case, and enough for tracking vCenter patch level.
 
 ## Next steps
 
