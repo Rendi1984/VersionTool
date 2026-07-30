@@ -183,6 +183,21 @@ Get-ChildItem C:\ -Filter product.conf -Recurse -ErrorAction SilentlyContinue |
 The folder layout differs from the expected `<product>\conf\product.conf`. Send the actual
 path and the parser can be adjusted.
 
+**A server I configured shows "No ManageEngine installation folder was reachable"**
+
+If that server is the machine running the script but named by its FQDN (e.g. `kmp.cc.co.il`
+while the short name is `KMP`), the script now recognises it as local and reads the disk
+directly. For a genuinely remote server, confirm `\\SERVER\C$\Program Files\ManageEngine`
+opens in Explorer - if it does not, it is SMB, the admin share or permissions.
+
+**Where does the HTML report go?**
+
+Next to the script, unless `-OutputPath` says otherwise. If you launched PowerShell from a UNC
+path (Explorer > File > Open Windows PowerShell while browsing `\\kmp\c$\temp`), the script
+directory *is* that UNC path, so the report lands there - it is not sent to any scanned server.
+Pass `-OutputPath C:\Reports\versions.html` to pin it down. One report always covers every
+server scanned in that run.
+
 **`ConvertFrom-Json : Invalid JSON primitive`**
 
 `config.json` is not valid JSON - usually an unescaped backslash, or a missing or extra comma

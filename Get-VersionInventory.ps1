@@ -84,7 +84,7 @@ $ErrorActionPreference = 'Stop'
 
 # Keep in step with the VERSION file. Printed at startup and in the report so the running
 # copy identifies itself even if the file was renamed or copied elsewhere.
-$script:ToolVersion = '3.2.0'
+$script:ToolVersion = '3.2.1'
 
 # ---------------------------------------------------------------------------
 # Config
@@ -190,6 +190,39 @@ function Get-SearchRoots {
     return $roots
 }
 
+function Test-IsLocalComputer {
+    <#
+        True when the name refers to the machine running the script - short name, FQDN,
+        localhost or a loopback address. Without this, configuring a server by its FQDN
+        (kmp.cc.co.il) while the short name is KMP makes the script treat the local machine
+        as remote and try to reach itself over SMB, which needlessly fails.
+    #>
+    param([string]$Computer)
+
+    if ([string]::IsNullOrWhiteSpace($Computer)) { return $true }
+
+    $c = $Computer.Trim().ToLower()
+    if ($c -eq 'localhost' -or $c -eq '.' -or $c -eq '127.0.0.1' -or $c -eq '::1') { return $true }
+    if ($c -eq ([string]$env:COMPUTERNAME).ToLower()) { return $true }
+
+    # Full computer name (short name + DNS domain), e.g. kmp.cc.co.il
+    try {
+        $domain = ([string]$env:USERDNSDOMAIN).ToLower()
+        if ($domain -and $c -eq "$(([string]$env:COMPUTERNAME).ToLower()).$domain") { return $true }
+    }
+    catch { }
+
+    # Compare against every name the local IP configuration answers to.
+    try {
+        $fqdn = ([System.Net.Dns]::GetHostEntry($env:COMPUTERNAME)).HostName.ToLower()
+        if ($c -eq $fqdn) { return $true }
+        if ($c -eq $fqdn.Split('.')[0]) { return $true }
+    }
+    catch { }
+
+    return $false
+}
+
 function ConvertTo-RemotePath {
     <#
         Maps a local path onto a named server's administrative share:
@@ -201,8 +234,7 @@ function ConvertTo-RemotePath {
     param([string]$Path, [string]$Computer)
 
     if ([string]::IsNullOrWhiteSpace($Path)) { return $Path }
-    if ([string]::IsNullOrWhiteSpace($Computer)) { return $Path }
-    if ($Computer -eq $env:COMPUTERNAME -or $Computer -eq 'localhost' -or $Computer -eq '.') { return $Path }
+    if (Test-IsLocalComputer -Computer $Computer) { return $Path }
     if ($Path.StartsWith('\\')) { return $Path }
 
     if ($Path -match '^([A-Za-z]):\\?(.*)$') {
@@ -436,7 +468,7 @@ function Get-MeProductsOnServer {
     }
 
     # Windows itself may know about an install outside the conventional roots.
-    if ($Computer -eq $env:COMPUTERNAME -or $Computer -eq 'localhost' -or $Computer -eq '.') {
+    if (Test-IsLocalComputer -Computer $Computer) {
         $seen = @{}
         foreach ($r in $results) {
             if ($r.InstallPath) { $seen[([string]$r.InstallPath).ToLower().TrimEnd('\')] = $true }
