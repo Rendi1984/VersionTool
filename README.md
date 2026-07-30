@@ -99,10 +99,9 @@ Options:
   all ManageEngine servers, vCenters and Windows servers listed in the config
 - `-ReplicationSummary` - run `repadmin /replsum` and show it in the Infrastructure Check tab
 - `-FsmoRoles` - show the five FSMO role holders in the Infrastructure Check tab
-- `-NonInteractive` - never prompt, never install, and do not open the report (for scheduled
-  tasks); skip anything that would need interaction
-- `-Show` - deprecated: the report now opens automatically. Kept for compatibility; forces
-  the report open even under `-NonInteractive`
+- `-NonInteractive` - never prompt and never install (for scheduled tasks); skip anything that
+  would need interaction
+- `-Show` - open the report in the browser when finished. Omit it for a scheduled task
 - `-Verbose` - log every root scanned, file read and API call attempted
 
 Typical output:
