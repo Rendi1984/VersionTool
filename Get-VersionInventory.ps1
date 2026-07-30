@@ -89,7 +89,7 @@ $ErrorActionPreference = 'Stop'
 
 # Keep in step with the VERSION file. Printed at startup and in the report so the running
 # copy identifies itself even if the file was renamed or copied elsewhere.
-$script:ToolVersion = '3.4.0'
+$script:ToolVersion = '3.4.1'
 
 # ---------------------------------------------------------------------------
 # Config
@@ -1100,7 +1100,7 @@ function New-MeHtmlReport {
               <th>Product</th>
               <th>Version</th>
               <th>Build</th>
-              <th>Arch</th>
+              <th>Architecture</th>
               <th>IP address</th>
               <th>Source</th>
             </tr>
