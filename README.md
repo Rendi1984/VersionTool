@@ -73,10 +73,10 @@ If that path opens in Explorer, the script will work.
 
 ```powershell
 # this machine
-.\Get-ManageEngineVersions.ps1 -Show
+.\Get-VersionInventory.ps1 -Show
 
 # production, one server per system
-.\Get-ManageEngineVersions.ps1 -ComputerName KMP01,ADAUDIT01,ADSSP01 -Show
+.\Get-VersionInventory.ps1 -ComputerName KMP01,ADAUDIT01,ADSSP01 -Show
 ```
 
 Options:
@@ -95,7 +95,7 @@ Options:
 Typical output:
 
 ```
-VersionTool v3.0.1 - Get-ManageEngineVersions-v3.0.1.ps1
+VersionTool v3.2.0 - Get-VersionInventory.ps1
 Scanning KMP01 ...
   ManageEngine KeyManager Plus - version 7.1.2 (build 7120)
     \\KMP01\C$\Program Files\ManageEngine\KeyManager\conf\product.conf
@@ -199,7 +199,7 @@ A vCenter appliance has no `C$` to read - it runs Photon Linux - so unlike Manag
 needs a network call and credentials.
 
 ```powershell
-.\Get-ManageEngineVersions.ps1 -VCenter vcenter01.lab.local -Show
+.\Get-VersionInventory.ps1 -VCenter vcenter01.lab.local -Show
 ```
 
 or in `config.json`:

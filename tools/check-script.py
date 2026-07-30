@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Static checks for Get-ManageEngineVersions.ps1.
+"""Static checks for Get-VersionInventory.ps1.
 
 There is no PowerShell in the development environment, so runtime errors are only
 found by the user running the script. These checks catch the classes of mistake that
@@ -103,7 +103,7 @@ def check(path):
 
 
 if __name__ == '__main__':
-    target = sys.argv[1] if len(sys.argv) > 1 else 'Get-ManageEngineVersions.ps1'
+    target = sys.argv[1] if len(sys.argv) > 1 else 'Get-VersionInventory.ps1'
     found = check(target)
     if found:
         print("FAIL: %s" % target)

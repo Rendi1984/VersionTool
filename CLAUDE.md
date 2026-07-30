@@ -13,7 +13,7 @@ self-contained HTML report grouped by vendor, then by server.
 Nothing is ever checked against a vendor's release page: the report says what is installed,
 never whether it is current. No reference versions, no status column.
 
-- `Get-ManageEngineVersions.ps1` - the tool. Windows PowerShell 5.1 compatible; no PowerShell 7
+- `Get-VersionInventory.ps1` - the tool. Windows PowerShell 5.1 compatible; no PowerShell 7
   syntax (no `??`, no ternary, no `&&`/`||`, ASCII only).
 - `config.json` - the only config, read as-is and never rewritten by the script. Ships in
   the ZIP and is committed; it holds no secrets, just a server list.
@@ -31,10 +31,10 @@ The config carries `reportTitle`, `outputPath`, `servers` (empty = local machine
 Whenever files are produced for the user, all three of these are required - no exceptions:
 1. **Package as ZIP**, named `VersionTool-v<version>.zip`, where `<version>` is read from `VERSION`.
    The ZIP holds **only what is needed to run the tool** - today that is
-   `Get-ManageEngineVersions.ps1` and `config.json`. No documentation, no project files.
+   `Get-VersionInventory.ps1` and `config.json`. No documentation, no project files.
    Put the files at the **root of the archive, with no wrapper folder** - extracting already
    creates a folder, so a prefix directory just nests one inside another.
-   Inside the ZIP the script is named `Get-ManageEngineVersions-v<version>.ps1`, so it is
+   Inside the ZIP the script is named `Get-VersionInventory-v<version>.ps1`, so it is
    obvious which build is being run. The repository keeps the unversioned name.
    `$script:ToolVersion` inside the script must match `VERSION` - bump both together.
 2. **Provide a download link** - send the ZIP with `SendUserFile`, and also link the files on the
@@ -61,6 +61,10 @@ Whenever files are produced for the user, all three of these are required - no e
   PowerShell here, so it is the only automated guard: it catches script-scope variables read
   but never set (a dropped parameter - this shipped three times), foreach variables colliding
   with a parameter name (PowerShell names are case-insensitive), brace balance and non-ASCII.
+- Under `Set-StrictMode`, `.Count` on a scalar throws "The property 'Count' cannot be found"
+  (shipped in 3.1.0). A function returning a one-element array unrolls it to a scalar, so never
+  call `.Count` on a raw function return - wrap the call in `@(...)`, or test truthiness with
+  `if (-not $x)` instead. The checker does not catch this yet.
 - Anything that would install software or store a credential must ask first, and declining
   must skip that check rather than fail the run.
 - This tool was originally committed to the DSMT-V2 repository by mistake and moved here.

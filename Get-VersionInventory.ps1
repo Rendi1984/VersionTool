@@ -50,12 +50,12 @@
     Open the report in the default browser when done.
 
 .EXAMPLE
-    .\Get-ManageEngineVersions.ps1 -Show
+    .\Get-VersionInventory.ps1 -Show
 
     Inventory the servers listed in config.json and open the report.
 
 .EXAMPLE
-    .\Get-ManageEngineVersions.ps1 -ComputerName KMP01,ADAUDIT01 -Show
+    .\Get-VersionInventory.ps1 -ComputerName KMP01,ADAUDIT01 -Show
 
     Inventory two servers without touching the config.
 
@@ -84,7 +84,7 @@ $ErrorActionPreference = 'Stop'
 
 # Keep in step with the VERSION file. Printed at startup and in the report so the running
 # copy identifies itself even if the file was renamed or copied elsewhere.
-$script:ToolVersion = '3.1.0'
+$script:ToolVersion = '3.2.0'
 
 # ---------------------------------------------------------------------------
 # Config
@@ -1159,22 +1159,24 @@ if (-not [System.IO.Path]::IsPathRooted($outFile)) {
 $extraRoots = @(Get-ConfigValue -Object $config -Name 'searchRoots' -Default @())
 
 # -ComputerName wins over the config; an empty list means this machine.
-$targets = @($ComputerName)
-if ($targets.Count -eq 0) {
-    $targets = @(Get-ConfigValue -Object $config -Name 'servers' -Default @())
+# Boolean tests instead of .Count: a PowerShell function that returns a one-element
+# array unrolls it to a scalar, and .Count on a scalar throws under Set-StrictMode.
+$targets = @($ComputerName | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+if (-not $targets) {
+    $fromConfig = Get-ConfigValue -Object $config -Name 'servers' -Default @()
+    $targets = @($fromConfig | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 }
-$targets = @($targets | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-if ($targets.Count -eq 0) { $targets = @($env:COMPUTERNAME) }
+if (-not $targets) { $targets = @($env:COMPUTERNAME) }
 
 $results = New-Object System.Collections.ArrayList
 
 foreach ($target in $targets) {
     Write-Host "Scanning $target ..."
 
-    $found = Get-MeProductsOnServer -Computer ([string]$target) -ExtraRoots $extraRoots
+    $found = @(Get-MeProductsOnServer -Computer ([string]$target) -ExtraRoots $extraRoots)
 
     foreach ($record in $found) {
-        if ($record.Found -and $Product -and @($Product).Count -gt 0) {
+        if ($record.Found -and $Product) {
             $matched = $false
             foreach ($wanted in $Product) {
                 if ($record.Name -like ('*' + [string]$wanted + '*') -or
@@ -1199,13 +1201,13 @@ foreach ($target in $targets) {
 }
 
 # ---- VMware ----------------------------------------------------------------
-$vCenters = @($VCenter)
-if ($vCenters.Count -eq 0) {
-    $vCenters = @(Get-ConfigValue -Object $config -Name 'vcenters' -Default @())
+$vCenters = @($VCenter | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+if (-not $vCenters) {
+    $fromConfig = Get-ConfigValue -Object $config -Name 'vcenters' -Default @()
+    $vCenters = @($fromConfig | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 }
-$vCenters = @($vCenters | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 
-if ($vCenters.Count -gt 0) {
+if ($vCenters) {
     $credentialFolder = [string](Get-ConfigValue -Object $config -Name 'credentialFolder' -Default '')
     $skipCert         = [bool](Get-ConfigValue -Object $config -Name 'skipCertificateCheck' -Default $true)
     $timeoutSec       = [int](Get-ConfigValue -Object $config -Name 'timeoutSec' -Default 30)
@@ -1220,9 +1222,10 @@ if ($vCenters.Count -gt 0) {
                             -TimeoutSec $timeoutSec `
                             -AllowPrompt $allowPrompt `
                             -AutoInstallPowerCLI ([bool]$InstallPowerCLI)
+        $vmwareRecords = @($vmwareRecords)
 
         foreach ($record in $vmwareRecords) {
-            if ($record.Found -and $Product -and @($Product).Count -gt 0) {
+            if ($record.Found -and $Product) {
                 $matched = $false
                 foreach ($wanted in $Product) {
                     if ($record.Name -like ('*' + [string]$wanted + '*')) { $matched = $true; break }
