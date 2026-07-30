@@ -1,5 +1,36 @@
 # VersionTool - next steps and ideas
 
+## TODO (requested): more vendors to add version checks for
+
+Each needs a different collection method - none of these exposes a `product.conf` on an
+admin share, so this is a new provider per system (like VMware was), not a config entry.
+
+- [ ] **FortiGate** - no file to read; it is an appliance. Options: the REST API
+      (`GET /api/v2/monitor/system/status` returns firmware version/build, needs an API key
+      or session token over HTTPS 443), or SSH `get system status`, or SNMP
+      (`fnSysVersion`). REST is the cleanest. Needs credentials + TCP 443, self-signed cert.
+- [ ] **NetApp ONTAP** - REST API `GET /api/cluster` returns `version.full` (ONTAP 9.6+),
+      or ONTAPI/ZAPI `system-get-version` on older releases, or SSH `version`. Needs
+      credentials + HTTPS 443.
+- [ ] **VMware Horizon** - the Connection Server is Windows, so its build might be readable
+      like ManageEngine (registry / install folder) for the local/remote server; the
+      pod/environment version is also available via the Horizon REST API
+      (`/rest/monitor/...`) with credentials. Decide per-component (Connection Server vs
+      Agent vs Composer).
+- [ ] **Commvault** - CommServe is Windows/SQL. The version is in the registry
+      (`HKLM\SOFTWARE\CommVault Systems\Galaxy\...` / `sGalaxyBaseInstallSize`-adjacent keys)
+      and in the CommServe SQL DB; there is also a REST API (`GET /SearchSvc/CVWebService.svc`
+      login then version). Registry read (like the Windows OS check) is probably the least
+      intrusive for the CommServe box.
+
+Shared design point: these are credentialed network checks (like VMware/vCenter), so they
+belong in the Versions tab under their own vendor region, reuse the DPAPI-encrypted
+credential store, and must ask before installing any module and skip on decline. Firewall:
+each is HTTPS 443 to the appliance/server, still nothing outbound to the internet.
+
+---
+
+
 Status at v2.0.0: the script reads conf\product.conf from each configured installation,
 extracts version / build / architecture, compares against reference values from the config,
 and writes an HTML report. The API/token path was removed in 2.0.0.
