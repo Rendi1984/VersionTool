@@ -9,6 +9,8 @@ self-contained HTML report grouped by vendor, then by server.
 - **VMware** - vCenter via the vSphere REST API, falling back to PowerCLI (which also yields
   ESXi hosts). This one does need credentials and TCP 443, because a vCenter appliance has no
   file share to read.
+- **Windows** - the OS version of a Windows server (what winver shows), read from the registry
+  (remote registry, then WMI for a remote box). Listed under `windowsServers`.
 
 Nothing is ever checked against a vendor's release page: the report says what is installed,
 never whether it is current. No reference versions, no status column.
@@ -21,8 +23,8 @@ never whether it is current. No reference versions, no status column.
   capability.
 
 The config carries `reportTitle`, `outputPath`, `servers` (empty = local machine),
-`searchRoots`, `vcenters` (empty = VMware skipped), `credentialFolder`,
-`skipCertificateCheck` and `timeoutSec`. Never commit a real customer hostname or credential;
+`searchRoots`, `vcenters` (empty = VMware skipped), `includeEsxi`, `windowsServers` and `domainControllers`
+(both empty/false = Windows check skipped), `credentialFolder`, `skipCertificateCheck` and `timeoutSec`. Never commit a real customer hostname or credential;
 `credentials/` and `*.cred.xml` are gitignored.
 
 ---

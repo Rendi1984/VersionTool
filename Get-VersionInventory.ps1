@@ -50,6 +50,14 @@
     Also report the ESXi hosts managed by each vCenter, with their versions. This needs
     PowerCLI, because ESXi versions are not exposed by the vCenter REST API.
 
+.PARAMETER WindowsServer
+    Windows servers to report the operating-system version of, overriding the
+    "windowsServers" list in config.json.
+
+.PARAMETER DomainControllers
+    Discover every domain controller in the current domain and report each one's OS version.
+    Combines with -WindowsServer / "windowsServers"; duplicates are checked once.
+
 .PARAMETER Show
     Open the report in the default browser when done.
 
@@ -78,6 +86,8 @@ param(
     [string]$OutputPath,
     [string]$Title,
     [string[]]$VCenter,
+    [string[]]$WindowsServer,
+    [switch]$DomainControllers,
     [switch]$InstallPowerCLI,
     [switch]$IncludeEsxi,
     [switch]$NonInteractive,
@@ -89,7 +99,7 @@ $ErrorActionPreference = 'Stop'
 
 # Keep in step with the VERSION file. Printed at startup and in the report so the running
 # copy identifies itself even if the file was renamed or copied elsewhere.
-$script:ToolVersion = '3.4.2'
+$script:ToolVersion = '3.5.0'
 
 # ---------------------------------------------------------------------------
 # Config
@@ -1004,6 +1014,120 @@ function Get-VMwareVersions {
 }
 
 # ---------------------------------------------------------------------------
+# Windows operating system
+#
+# The OS version (what winver shows) lives in the registry, not in a file or an API.
+# Locally the registry is read directly; for a remote server the remote registry is
+# tried first, then WMI (Win32_OperatingSystem) as a fallback.
+# ---------------------------------------------------------------------------
+function Get-DomainControllerNames {
+    <#
+        Every domain controller in the current domain, by FQDN. Uses the .NET
+        ActiveDirectory class, which is present on any domain-joined Windows machine -
+        no RSAT / ActiveDirectory PowerShell module required.
+    #>
+    try {
+        $domain = [System.DirectoryServices.ActiveDirectory.Domain]::GetCurrentDomain()
+        return @($domain.DomainControllers | ForEach-Object { [string]$_.Name })
+    }
+    catch {
+        Write-Warning "Could not enumerate domain controllers: $($_.Exception.Message)"
+        return @()
+    }
+}
+
+function Get-WindowsOSVersion {
+    param([string]$Computer)
+
+    $ip = Resolve-IPv4 -Name $Computer
+
+    $record = [pscustomobject]@{
+        Vendor       = 'Windows'
+        Server       = $Computer
+        IPAddress    = $ip
+        Name         = $null
+        FolderName   = $null
+        Version      = $null
+        Build        = $null
+        Architecture = $null
+        InstallPath  = $null
+        Source       = $null
+        Found        = $false
+        Error        = $null
+        CheckedAt    = (Get-Date)
+    }
+
+    $regSub  = 'SOFTWARE\Microsoft\Windows NT\CurrentVersion'
+    $product = ''
+    $display = ''
+    $build   = ''
+    $ubr     = ''
+    $source  = ''
+
+    $baseKey = $null
+    try {
+        if (Test-IsLocalComputer -Computer $Computer) {
+            $baseKey = [Microsoft.Win32.RegistryKey]::OpenBaseKey('LocalMachine', 'Registry64')
+            $source  = 'registry (local)'
+        }
+        else {
+            $baseKey = [Microsoft.Win32.RegistryKey]::OpenRemoteBaseKey('LocalMachine', $Computer)
+            $source  = "remote registry on $Computer"
+        }
+    }
+    catch {
+        Write-Verbose "[$Computer] could not open the registry: $($_.Exception.Message)"
+    }
+
+    if ($baseKey) {
+        try {
+            $k = $baseKey.OpenSubKey($regSub)
+            if ($k) {
+                $product = [string]$k.GetValue('ProductName')
+                $display = [string]$k.GetValue('DisplayVersion')
+                if ([string]::IsNullOrWhiteSpace($display)) { $display = [string]$k.GetValue('ReleaseId') }
+                $build   = [string]$k.GetValue('CurrentBuildNumber')
+                $ubr     = [string]$k.GetValue('UBR')
+                $k.Close()
+            }
+        }
+        catch { Write-Verbose "[$Computer] could not read CurrentVersion: $($_.Exception.Message)" }
+        finally { try { $baseKey.Close() } catch { } }
+    }
+
+    # WMI fallback when the registry could not be read (e.g. RemoteRegistry disabled).
+    if ([string]::IsNullOrWhiteSpace($build)) {
+        try {
+            $os = Get-CimInstance -ClassName Win32_OperatingSystem -ComputerName $Computer -ErrorAction Stop
+            if ([string]::IsNullOrWhiteSpace($product)) { $product = [string]$os.Caption }
+            $build  = [string]$os.BuildNumber
+            $source = "WMI Win32_OperatingSystem on $Computer"
+        }
+        catch {
+            Write-Verbose "[$Computer] WMI query failed: $($_.Exception.Message)"
+        }
+    }
+
+    if ([string]::IsNullOrWhiteSpace($build) -and [string]::IsNullOrWhiteSpace($product)) {
+        $record.Name  = 'Windows'
+        $record.Error = "Could not read the OS version. A remote server needs the RemoteRegistry service or WMI (Win32_OperatingSystem) reachable, plus admin rights."
+        return $record
+    }
+
+    $fullBuild = $build
+    if ($build -and $ubr) { $fullBuild = "$build.$ubr" }
+
+    if ([string]::IsNullOrWhiteSpace($product)) { $product = 'Windows' }
+
+    $record.Name    = ($product -replace '^Microsoft\s+', '')
+    $record.Version = $display
+    $record.Build   = $fullBuild
+    $record.Source  = $source
+    $record.Found   = $true
+    return $record
+}
+
+# ---------------------------------------------------------------------------
 # HTML report
 # ---------------------------------------------------------------------------
 function ConvertTo-HtmlText {
@@ -1375,6 +1499,42 @@ if ($vCenters) {
                 Write-Warning ("{0}: {1}" -f $vc, $record.Error)
             }
         }
+    }
+}
+
+# ---- Windows OS versions (e.g. Domain Controllers) -------------------------
+$winServers = @($WindowsServer | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+if (-not $winServers) {
+    $fromConfig = Get-ConfigValue -Object $config -Name 'windowsServers' -Default @()
+    $winServers = @($fromConfig | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+}
+
+# Auto-discover every domain controller when asked, and merge with any explicit list.
+$wantDcs = [bool]$DomainControllers -or [bool](Get-ConfigValue -Object $config -Name 'domainControllers' -Default $false)
+if ($wantDcs) {
+    Write-Host "Discovering domain controllers ..."
+    $dcNames = @(Get-DomainControllerNames)
+    if ($dcNames.Count -gt 0) {
+        Write-Host ("  found: {0}" -f ($dcNames -join ', ')) -ForegroundColor DarkGray
+    }
+    $winServers = @($winServers + $dcNames)
+}
+
+# De-duplicate, case-insensitively, so a DC listed both ways is checked once.
+$winServers = @($winServers | Sort-Object -Unique)
+
+foreach ($winSrv in $winServers) {
+    Write-Host "Checking Windows OS on $winSrv ..."
+
+    $record = Get-WindowsOSVersion -Computer ([string]$winSrv)
+    [void]$results.Add($record)
+
+    if ($record.Found) {
+        Write-Host ("  {0} - version {1} (build {2})" -f $record.Name, $record.Version, $record.Build)
+        Write-Host ("    {0}" -f $record.Source) -ForegroundColor DarkGray
+    }
+    else {
+        Write-Warning ("{0}: {1}" -f $winSrv, $record.Error)
     }
 }
 

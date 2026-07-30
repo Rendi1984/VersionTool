@@ -11,6 +11,7 @@ Supported today:
 |---|---|---|
 | **ManageEngine** | Every product found - ADAudit Plus, ADSelfService Plus, Key Manager Plus, ADManager Plus, ... | Reads `conf\product.conf` on disk. No credentials |
 | **VMware** | vCenter Server, and the ESXi hosts it manages | vSphere REST API, falling back to PowerCLI. Needs credentials |
+| **Windows** | The OS version of any Windows server (e.g. Domain Controllers) - what `winver` shows | Registry (remote registry for a remote server), falling back to WMI |
 
 There is no ManageEngine product list to maintain: everything found under the installation
 roots is reported, so a product installed later shows up on its own.
@@ -89,6 +90,8 @@ Options:
 - `-VCenter <names>` - vCenter servers to query, overriding the config
 - `-InstallPowerCLI` - agree up front to installing PowerCLI if it is needed
 - `-IncludeEsxi` - also report the ESXi hosts each vCenter manages, with their versions
+- `-WindowsServer <names>` - Windows servers to report the OS version of
+- `-DomainControllers` - discover every DC in the domain and report each one's OS version
 - `-NonInteractive` - never prompt and never install; skip anything that would need it
 - `-Show` - open the report when finished
 - `-Verbose` - log every root scanned, file read and API call attempted
@@ -120,6 +123,8 @@ is scanned.
   "searchRoots": [],
   "vcenters": ["vcenter01.lab.local"],
   "includeEsxi": false,
+  "windowsServers": [],
+  "domainControllers": true,
   "credentialFolder": "",
   "skipCertificateCheck": true,
   "timeoutSec": 30
@@ -134,6 +139,8 @@ is scanned.
 | `searchRoots` | Extra folders to search, for installations outside the conventional locations, e.g. `["F:\\Apps\\ManageEngine"]` |
 | `vcenters` | vCenter hostnames to query. Empty means VMware is skipped entirely |
 | `includeEsxi` | Also list the ESXi hosts of each vCenter (needs PowerCLI). Default `false` |
+| `windowsServers` | Windows servers to report the OS version of. Empty means the Windows check is skipped |
+| `domainControllers` | `true` auto-discovers every DC in the domain and reports its OS version |
 | `credentialFolder` | Where encrypted vCenter credentials are stored. Empty means `credentials\` next to the script |
 | `skipCertificateCheck` | Accept vCenter's self-signed certificate. Default `true` |
 | `timeoutSec` | Per REST call. Default 30 |
@@ -288,6 +295,33 @@ the config):
 ESXi versions are **not** exposed by the vCenter REST API, so this route uses PowerCLI - the
 same install-on-consent flow applies. If PowerCLI is unavailable and you decline installing it,
 the vCenter is still reported and a warning notes that the hosts were skipped.
+
+## Windows OS version (Domain Controllers and other servers)
+
+To report the operating-system version of a Windows server - the same "Windows Server 2022,
+Version 21H2 (OS Build 20348.xxxx)" that `winver` shows:
+
+```powershell
+# every domain controller, discovered automatically
+.\Get-VersionInventory.ps1 -DomainControllers -Show
+
+# or specific servers by name
+.\Get-VersionInventory.ps1 -WindowsServer DC01,DC02 -Show
+```
+
+`-DomainControllers` (or `"domainControllers": true`) enumerates the DCs of the current domain
+via .NET, so nothing has to be listed by hand and a new DC is picked up on its own. It needs no
+RSAT or ActiveDirectory module. The two can be combined; a DC covered both ways is checked once.
+
+The version is read from `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion`
+(`ProductName`, `DisplayVersion`, `CurrentBuildNumber` + `UBR`). For a remote server this uses:
+
+1. **Remote registry** - needs the *Remote Registry* service running on the target and admin
+   rights. On many servers that service is set to Manual/Disabled by default.
+2. **WMI** (`Win32_OperatingSystem`) as a fallback - needs WMI/WinRM reachable.
+
+If neither works, the row shows the server with an error explaining what to enable. The local
+machine is always readable with no extra service.
 
 ## Next steps
 

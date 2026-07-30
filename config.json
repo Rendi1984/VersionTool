@@ -5,6 +5,8 @@
   "searchRoots": [],
   "vcenters": [],
   "includeEsxi": false,
+  "windowsServers": [],
+  "domainControllers": false,
   "credentialFolder": "",
   "skipCertificateCheck": true,
   "timeoutSec": 30
