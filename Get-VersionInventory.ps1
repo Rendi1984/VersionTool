@@ -44,10 +44,14 @@
     Report only ManageEngine products whose name contains one of these strings.
 
 .PARAMETER System
-    Pick which systems to check, from a fixed list (tab-completes): ManageEngine, VMware,
-    Windows, DomainControllers, Replication, FSMO, or All. When given, only the chosen ones
-    run; without it, everything that is configured runs. ManageEngine / VMware / Windows still
-    take their targets from the config lists.
+    Which systems to report versions for, from a fixed list (tab-completes): ManageEngine,
+    VMware, Windows, or All. Targets come from the config lists (servers / vcenters /
+    windowsServers) unless overridden with -ComputerName / -VCenter / -WindowsServer.
+    More systems join this list as they are added.
+
+.PARAMETER Infrastructure
+    Run the infrastructure checks: domain controllers, AD replication (repadmin /replsum)
+    and FSMO role holders. These fill the Infrastructure Check tab.
 
 .PARAMETER OutputPath
     Path of the HTML report. Overrides "outputPath" from the config.
@@ -88,8 +92,9 @@ param(
     [string[]]$Product,
     [string]$OutputPath,
     [string]$Title,
-    [ValidateSet('All', 'ManageEngine', 'VMware', 'Windows', 'DomainControllers', 'Replication', 'FSMO')]
+    [ValidateSet('ManageEngine', 'VMware', 'Windows', 'All')]
     [string[]]$System,
+    [switch]$Infrastructure,
     [string[]]$VCenter,
     [string[]]$WindowsServer,
     [switch]$IncludeEsxi,
@@ -103,7 +108,7 @@ $ErrorActionPreference = 'Stop'
 
 # Keep in step with the VERSION file. Printed at startup and in the report so the running
 # copy identifies itself even if the file was renamed or copied elsewhere.
-$script:ToolVersion = '3.11.0'
+$script:ToolVersion = '4.0.0'
 
 # ---------------------------------------------------------------------------
 # Config
@@ -1719,6 +1724,51 @@ $panes
     return $Path
 }
 
+function Show-Usage {
+    <#
+        Printed when the script is run with nothing to do: no parameters and a config that
+        enables nothing. Lists what can be asked for rather than producing an empty report.
+    #>
+    $me = $MyInvocation.MyCommand.Name
+    if ([string]::IsNullOrWhiteSpace($me)) { $me = 'Get-VersionInventory.ps1' }
+
+    Write-Host ''
+    Write-Host 'Nothing to do - tell it what to check:' -ForegroundColor Yellow
+    Write-Host ''
+    Write-Host '  INFRASTRUCTURE CHECKS' -ForegroundColor Cyan
+    Write-Host '    -Infrastructure            Domain controllers, AD replication (repadmin /replsum)'
+    Write-Host '                               and FSMO role holders.'
+    Write-Host ''
+    Write-Host '  SYSTEM VERSIONS' -ForegroundColor Cyan
+    Write-Host '    -System <name>             ManageEngine | VMware | Windows | All'
+    Write-Host '                               Targets come from config.json unless overridden below.'
+    Write-Host '    -IncludeEsxi               With VMware, also list the ESXi hosts of each vCenter.'
+    Write-Host ''
+    Write-Host '  TARGET OVERRIDES (optional - otherwise config.json is used)' -ForegroundColor Cyan
+    Write-Host '    -ComputerName <names>      ManageEngine servers to scan.'
+    Write-Host '    -VCenter <names>           vCenter servers to query.'
+    Write-Host '    -WindowsServer <names>     Windows servers to read the OS version of.'
+    Write-Host '    -Product <name>            Only ManageEngine products matching this name.'
+    Write-Host ''
+    Write-Host '  GENERAL' -ForegroundColor Cyan
+    Write-Host '    -Show                      Open the report when finished.'
+    Write-Host '    -OutputPath <path>         Where to write the HTML report.'
+    Write-Host '    -ConfigPath <path>         Use a different config file.'
+    Write-Host '    -Title <text>              Heading for the report.'
+    Write-Host '    -NonInteractive            Never prompt or install (scheduled tasks).'
+    Write-Host '    -InstallPowerCLI           Agree up front to installing PowerCLI if needed.'
+    Write-Host '    -Verbose                   Log every path searched and call attempted.'
+    Write-Host ''
+    Write-Host '  EXAMPLES' -ForegroundColor Cyan
+    Write-Host "    .\$me -Infrastructure -Show"
+    Write-Host "    .\$me -System VMware -IncludeEsxi -Show"
+    Write-Host "    .\$me -Infrastructure -System ManageEngine,VMware -Show"
+    Write-Host ''
+    Write-Host '  A scheduled run needs no parameters: fill in config.json (servers, vcenters,' -ForegroundColor DarkGray
+    Write-Host '  windowsServers, domainControllers, replicationSummary, fsmoRoles) instead.' -ForegroundColor DarkGray
+    Write-Host ''
+}
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -1743,18 +1793,37 @@ if (-not [System.IO.Path]::IsPathRooted($outFile)) {
 
 $extraRoots = @(Get-ConfigValue -Object $config -Name 'searchRoots' -Default @())
 
-# -System picks which systems to run, from the ValidateSet. When it is given, only the
-# chosen ones run; without it, each check runs per its config (a config-driven / scheduled
-# run). 'All' selects everything.
+# -System picks the version checks; -Infrastructure runs the AD checks. Targets still come
+# from the config (or the -ComputerName / -VCenter / -WindowsServer overrides).
 $selected = @($System)
-$explicit = $selected.Count -gt 0
 $isAll    = $selected -contains 'All'
 
-# Per-check "on" flags. When -System is used, on = selected; otherwise on = $true here and
-# the actual trigger is the config below.
-$meOn  = if ($explicit) { [bool]($isAll -or ($selected -contains 'ManageEngine')) }     else { $true }
-$vmOn  = if ($explicit) { [bool]($isAll -or ($selected -contains 'VMware')) }            else { $true }
-$winOn = if ($explicit) { [bool]($isAll -or ($selected -contains 'Windows')) }           else { $true }
+# Anything asked for on the command line?
+$askedSystems = ($selected.Count -gt 0) -or
+                (@($ComputerName).Count -gt 0) -or (@($VCenter).Count -gt 0) -or (@($WindowsServer).Count -gt 0)
+$askedInfra   = [bool]$Infrastructure
+$askedAnything = $askedSystems -or $askedInfra
+
+# Does the config drive a run on its own? That is how a scheduled task works.
+$cfgServers  = @(@(Get-ConfigValue -Object $config -Name 'servers'        -Default @()) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+$cfgVcenters = @(@(Get-ConfigValue -Object $config -Name 'vcenters'       -Default @()) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+$cfgWindows  = @(@(Get-ConfigValue -Object $config -Name 'windowsServers' -Default @()) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+$cfgDcs      = [bool](Get-ConfigValue -Object $config -Name 'domainControllers'  -Default $false)
+$cfgRepl     = [bool](Get-ConfigValue -Object $config -Name 'replicationSummary' -Default $false)
+$cfgFsmo     = [bool](Get-ConfigValue -Object $config -Name 'fsmoRoles'          -Default $false)
+$configDrivesRun = ($cfgServers.Count -gt 0) -or ($cfgVcenters.Count -gt 0) -or ($cfgWindows.Count -gt 0) -or
+                   $cfgDcs -or $cfgRepl -or $cfgFsmo
+
+# Nothing asked for and nothing configured: show what can be asked for, and stop.
+if (-not $askedAnything -and -not $configDrivesRun) {
+    Show-Usage
+    return
+}
+
+# Which version checks run. With -System, only what is named; otherwise whatever has targets.
+$meOn  = if ($selected.Count -gt 0) { [bool]($isAll -or ($selected -contains 'ManageEngine')) } else { $true }
+$vmOn  = if ($selected.Count -gt 0) { [bool]($isAll -or ($selected -contains 'VMware')) }       else { $true }
+$winOn = if ($selected.Count -gt 0) { [bool]($isAll -or ($selected -contains 'Windows')) }      else { $true }
 
 # ManageEngine / VMware / Windows targets, only when that system is on. All list building is
 # wrapped in @(...) so an empty or single-element result is still an array - .Count on a
@@ -1872,19 +1941,24 @@ foreach ($winSrv in $winServers) {
 
 # ---- Infrastructure checks -------------------------------------------------
 # Domain Controllers, replication and FSMO belong to the Infrastructure Check tab, not to
-# Versions. When -System is used they run iff selected; otherwise they run per the config,
-# and a bare run (no version targets, no infra flags) still shows replication + FSMO.
-$bareRun = -not $anyVersionCheck
-
-if ($explicit) {
-    $wantDcs   = $isAll -or ($selected -contains 'DomainControllers')
-    $wantRepl  = $isAll -or ($selected -contains 'Replication')
-    $wantFsmo  = $isAll -or ($selected -contains 'FSMO')
+# Versions. -Infrastructure turns all three on; otherwise the config decides.
+if ($askedInfra) {
+    # -Infrastructure means all three AD checks.
+    $wantDcs  = $true
+    $wantRepl = $true
+    $wantFsmo = $true
+}
+elseif ($askedSystems) {
+    # A version-only run: no infrastructure checks unless the config asks for them.
+    $wantDcs  = $cfgDcs
+    $wantRepl = $cfgRepl
+    $wantFsmo = $cfgFsmo
 }
 else {
-    $wantDcs   = [bool](Get-ConfigValue -Object $config -Name 'domainControllers'  -Default $false)
-    $wantRepl  = $bareRun -or $wantDcs -or [bool](Get-ConfigValue -Object $config -Name 'replicationSummary' -Default $false)
-    $wantFsmo  = $bareRun -or $wantDcs -or [bool](Get-ConfigValue -Object $config -Name 'fsmoRoles'          -Default $false)
+    # Config-driven (scheduled) run.
+    $wantDcs  = $cfgDcs
+    $wantRepl = $cfgRepl -or $cfgDcs
+    $wantFsmo = $cfgFsmo -or $cfgDcs
 }
 
 # Domain Controllers: discover them and read each one's OS version, into a separate

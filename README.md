@@ -74,29 +74,46 @@ If that path opens in Explorer, the script will work.
 ## Run
 
 ```powershell
-# this machine
-.\Get-VersionInventory.ps1 -Show
+# infrastructure health: DCs, replication, FSMO
+.\Get-VersionInventory.ps1 -Infrastructure -Show
 
-# production, one server per system
-.\Get-VersionInventory.ps1 -ComputerName KMP01,ADAUDIT01,ADSSP01 -Show
+# system versions
+.\Get-VersionInventory.ps1 -System VMware -IncludeEsxi -Show
+
+# both
+.\Get-VersionInventory.ps1 -Infrastructure -System ManageEngine,VMware -Show
 ```
 
 Options:
 
-- `-System <name>` - which systems to check, from a list (tab-completes): `ManageEngine`,
-  `VMware`, `Windows`, `DomainControllers`, `Replication`, `FSMO`, `All`. Omit to run whatever
-  the config enables
-- `-ComputerName <names>` - ManageEngine servers to scan, overriding the config `servers`
-- `-VCenter <names>` - vCenter servers to query, overriding the config `vcenters`
-- `-WindowsServer <names>` - Windows servers whose OS version to report, overriding the config
-- `-IncludeEsxi` - also report the ESXi hosts of each vCenter (needs PowerCLI)
-- `-Product <name>` - narrow the ManageEngine result to products whose name contains this string
-- `-ConfigPath <path>` - a different config file (default: `config.json` next to the script)
-- `-OutputPath <path>` - where to write the HTML
-- `-Title <text>` - heading for the report
+**Infrastructure checks**
+
+- `-Infrastructure` - domain controllers, AD replication (`repadmin /replsum`) and FSMO role
+  holders; fills the Infrastructure Check tab
+
+**System versions**
+
+- `-System <name>` - `ManageEngine`, `VMware`, `Windows` or `All` (tab-completes). Targets come
+  from `config.json` unless overridden below. More systems join this list as they are added
+- `-IncludeEsxi` - with VMware, also list the ESXi hosts of each vCenter (needs PowerCLI)
+
+**Target overrides** (optional - otherwise `config.json` is used)
+
+- `-ComputerName <names>` - ManageEngine servers to scan
+- `-VCenter <names>` - vCenter servers to query
+- `-WindowsServer <names>` - Windows servers to read the OS version of
+- `-Product <name>` - only ManageEngine products whose name contains this string
+
+**General**
+
+- `-Show` - open the report when finished
+- `-OutputPath <path>` / `-ConfigPath <path>` / `-Title <text>`
+- `-NonInteractive` - never prompt or install (scheduled tasks)
 - `-InstallPowerCLI` - agree up front to installing PowerCLI if it is needed
-- `-NonInteractive` - never prompt and never install (for scheduled tasks)
-- `-Show` - open the report in the browser when finished
+- `-Verbose` - log every path searched and call attempted
+
+Run with no parameters (and an empty config) and the script prints this list instead of
+producing an empty report.
 
 Typical output:
 
@@ -164,11 +181,11 @@ only when a version check was requested.
 
 - **Infrastructure Check** (always present, shown first) - general health checks that are not a
   version, each in its own block, in this order:
-  - **Domain Controllers** - each DC with its OS version and build (`-System DomainControllers`).
+  - **Domain Controllers** - each DC with its OS version and build.
   - **AD replication** - `repadmin /replsum`, with a healthy / failures-detected badge.
   - **FSMO role holders** - the five roles and which DC holds each.
-  These run on a bare run (no parameters), when selected with `-System DomainControllers` /
-  `Replication` / `FSMO`, or via the matching config flags for a scheduled run.
+  All three run together with `-Infrastructure`, or via the matching config flags
+  (`domainControllers`, `replicationSummary`, `fsmoRoles`) for a scheduled run.
 - **Versions** (only when a version check is requested) - one region per vendor (ManageEngine,
   VMware, Windows), subdivided by server, a row per item: name, version, build, IP address and
   source. Summary cards count items found, vendors, servers queried and anything with no result.
@@ -176,9 +193,8 @@ only when a version check was requested.
 A bare run therefore produces only the Infrastructure Check tab; asking for `servers`,
 `vcenters` or `windowsServers` adds the Versions tab.
 
-`-System All` (or the config lists) enables everything at once. The AD checks discover their own
-targets; the ManageEngine / VMware / Windows checks run for whatever the config lists - it does
-not invent servers.
+`-Infrastructure -System All` runs everything. The AD checks discover their own targets; the
+version checks run for whatever the config lists - they do not invent servers.
 
 Nothing in the report claims to know whether a newer release exists: there is no reference
 version and no status column, because the tool never contacts the vendors.
@@ -338,13 +354,13 @@ Version 21H2 (OS Build 20348.xxxx)" that `winver` shows:
 
 ```powershell
 # every domain controller, discovered automatically
-.\Get-VersionInventory.ps1 -System DomainControllers -Show
+.\Get-VersionInventory.ps1 -Infrastructure -Show
 
 # or specific servers by name
 .\Get-VersionInventory.ps1 -WindowsServer DC01,DC02 -Show
 ```
 
-`-System DomainControllers` (or `"domainControllers": true` for a scheduled run) enumerates the DCs of the current domain
+`-Infrastructure` (or `"domainControllers": true` for a scheduled run) enumerates the DCs of the current domain
 via .NET, so nothing has to be listed by hand and a new DC is picked up on its own. It needs no
 RSAT or ActiveDirectory module. The two can be combined; a DC covered both ways is checked once.
 
