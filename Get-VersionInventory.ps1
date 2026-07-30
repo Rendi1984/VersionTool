@@ -64,7 +64,8 @@
     for the fullest report the current environment and config allow.
 
 .PARAMETER Show
-    Open the report in the default browser when done.
+    Deprecated - the report now opens in the default browser automatically. This switch is
+    kept for compatibility and forces the report open even under -NonInteractive.
 
 .EXAMPLE
     .\Get-VersionInventory.ps1 -Show
@@ -107,7 +108,7 @@ $ErrorActionPreference = 'Stop'
 
 # Keep in step with the VERSION file. Printed at startup and in the report so the running
 # copy identifies itself even if the file was renamed or copied elsewhere.
-$script:ToolVersion = '3.9.0'
+$script:ToolVersion = '3.9.1'
 
 # ---------------------------------------------------------------------------
 # Config
@@ -1936,7 +1937,9 @@ $reportPath = New-MeHtmlReport -Results $results.ToArray() -Title $reportTitle -
 Write-Host ""
 Write-Host "Report written to: $reportPath"
 
-if ($Show) {
+# The report opens automatically. -NonInteractive suppresses it (scheduled tasks); -Show is
+# kept for compatibility and forces it open even then.
+if ($Show -or -not $NonInteractive) {
     try { Start-Process -FilePath $reportPath }
     catch { Write-Warning "Could not open the report automatically: $($_.Exception.Message)" }
 }
