@@ -12,6 +12,11 @@ self-contained HTML report grouped by vendor, then by server.
 - **Windows** - the OS version of a Windows server (what winver shows), read from the registry
   (remote registry, then WMI for a remote box). Listed under `windowsServers`.
 
+- **Infrastructure Check** - general health checks that are not versions, on their own report
+  tab. Today: AD replication via `repadmin /replsum` (bare run, `-ReplicationSummary`, or the
+  `replicationSummary` config flag).
+
+The report is a two-tab HTML page: Versions (vendor tables) and Infrastructure Check.
 Nothing is ever checked against a vendor's release page: the report says what is installed,
 never whether it is current. No reference versions, no status column.
 

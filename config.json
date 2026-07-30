@@ -7,6 +7,7 @@
   "includeEsxi": false,
   "windowsServers": [],
   "domainControllers": false,
+  "replicationSummary": false,
   "credentialFolder": "",
   "skipCertificateCheck": true,
   "timeoutSec": 30

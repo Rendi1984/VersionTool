@@ -92,6 +92,7 @@ Options:
 - `-IncludeEsxi` - also report the ESXi hosts each vCenter manages, with their versions
 - `-WindowsServer <names>` - Windows servers to report the OS version of
 - `-DomainControllers` - discover every DC in the domain and report each one's OS version
+- `-ReplicationSummary` - run `repadmin /replsum` and show it in the Infrastructure Check tab
 - `-NonInteractive` - never prompt and never install; skip anything that would need it
 - `-Show` - open the report when finished
 - `-Verbose` - log every root scanned, file read and API call attempted
@@ -125,6 +126,7 @@ is scanned.
   "includeEsxi": false,
   "windowsServers": [],
   "domainControllers": true,
+  "replicationSummary": false,
   "credentialFolder": "",
   "skipCertificateCheck": true,
   "timeoutSec": 30
@@ -141,6 +143,7 @@ is scanned.
 | `includeEsxi` | Also list the ESXi hosts of each vCenter (needs PowerCLI). Default `false` |
 | `windowsServers` | Windows servers to report the OS version of. Empty means the Windows check is skipped |
 | `domainControllers` | `true` auto-discovers every DC in the domain and reports its OS version |
+| `replicationSummary` | `true` runs `repadmin /replsum` and shows it under Infrastructure Check |
 | `credentialFolder` | Where encrypted vCenter credentials are stored. Empty means `credentials\` next to the script |
 | `skipCertificateCheck` | Accept vCenter's self-signed certificate. Default `true` |
 | `timeoutSec` | Per REST call. Default 30 |
@@ -153,12 +156,24 @@ Roots searched by default: `C:\ManageEngine`, `C:\Program Files\ManageEngine`,
 
 ## The report
 
-One region per vendor - ManageEngine, VMware - each subdivided by server, with a row per
-item: name, version, build, IP address and where the values came from. Summary cards at the
-top count items found, vendors, servers queried and anything that returned nothing.
+The report has two tabs:
+
+- **Versions** - one region per vendor (ManageEngine, VMware, Windows), each subdivided by
+  server, with a row per item: name, version, build, IP address and where the values came
+  from. Summary cards count items found, vendors, servers queried and anything with no result.
+- **Infrastructure Check** - general health checks that are not a version. Today this is the
+  AD replication summary (`repadmin /replsum`), shown with a healthy / failures badge. It is
+  filled on a bare run (no parameters), with `-ReplicationSummary`, or `"replicationSummary": true`.
 
 Nothing in the report claims to know whether a newer release exists: there is no reference
 version and no status column, because the tool never contacts the vendors.
+
+## Infrastructure Check: AD replication
+
+`repadmin /replsum` summarises replication health across all domain controllers. `repadmin`
+ships with the AD DS role and the RSAT AD DS tools, so it is present on a DC. The raw output is
+shown verbatim in the Infrastructure Check tab; a non-zero fails count flips the badge to
+"failures detected". If `repadmin` is not on the machine, the tab says so instead.
 
 ## Caveat: product.conf can lag behind a service pack
 

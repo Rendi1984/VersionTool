@@ -88,6 +88,7 @@ param(
     [string[]]$VCenter,
     [string[]]$WindowsServer,
     [switch]$DomainControllers,
+    [switch]$ReplicationSummary,
     [switch]$InstallPowerCLI,
     [switch]$IncludeEsxi,
     [switch]$NonInteractive,
@@ -99,7 +100,7 @@ $ErrorActionPreference = 'Stop'
 
 # Keep in step with the VERSION file. Printed at startup and in the report so the running
 # copy identifies itself even if the file was renamed or copied elsewhere.
-$script:ToolVersion = '3.5.2'
+$script:ToolVersion = '3.6.0'
 
 # ---------------------------------------------------------------------------
 # Config
@@ -1036,6 +1037,49 @@ function Get-DomainControllerNames {
     }
 }
 
+function Get-ReplicationSummary {
+    <#
+        Runs "repadmin /replsum" and returns its text. repadmin ships with the AD DS role
+        and the RSAT AD DS tools, so it is present on a domain controller. Returns an object
+        with Available (was repadmin found), Ok (no failures detected) and Text.
+    #>
+    if (-not (Get-Command 'repadmin.exe' -ErrorAction SilentlyContinue) -and
+        -not (Get-Command 'repadmin'     -ErrorAction SilentlyContinue)) {
+        return [pscustomobject]@{
+            Available = $false
+            Ok        = $false
+            Text      = 'repadmin was not found on this machine. It ships with the AD DS role and the RSAT AD DS tools - run this on a domain controller, or install RSAT.'
+        }
+    }
+
+    try {
+        $raw = & repadmin /replsum 2>&1 | Out-String
+    }
+    catch {
+        return [pscustomobject]@{
+            Available = $true
+            Ok        = $false
+            Text      = "repadmin /replsum failed: $($_.Exception.Message)"
+        }
+    }
+
+    $text = ([string]$raw).Trim()
+
+    # The summary lists fails/total per DSA; a non-zero fail count or error means trouble.
+    $ok = $true
+    foreach ($line in ($text -split "`r?`n")) {
+        if ($line -match '(\d+)\s*/\s*(\d+)') {
+            if ([int]$Matches[1] -gt 0) { $ok = $false; break }
+        }
+    }
+
+    return [pscustomobject]@{
+        Available = $true
+        Ok        = $ok
+        Text      = $text
+    }
+}
+
 function Get-WindowsOSVersion {
     param([string]$Computer)
 
@@ -1145,7 +1189,8 @@ function New-MeHtmlReport {
     param(
         [object[]]$Results,
         [string]$Title,
-        [string]$Path
+        [string]$Path,
+        $ReplSummary
     )
 
     $generated = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
@@ -1260,6 +1305,41 @@ $sectionsHtml
 "@
     }
 
+    # ---- Infrastructure Check tab (general checks, e.g. AD replication) ------
+    $infraBlocks = New-Object System.Collections.ArrayList
+    if ($null -ne $ReplSummary) {
+        if ($ReplSummary.Available -and $ReplSummary.Ok) {
+            $badge = '<span class="badge ok">healthy</span>'
+        }
+        elseif ($ReplSummary.Available) {
+            $badge = '<span class="badge bad">failures detected</span>'
+        }
+        else {
+            $badge = '<span class="badge muted">not available</span>'
+        }
+
+        $replBlock = @"
+  <div class="vendor">
+    <div class="vendor-head">
+      <span class="title">Active Directory replication</span>
+      <span class="meta">repadmin /replsum $badge</span>
+    </div>
+    <pre class="checkout">$(ConvertTo-HtmlText $ReplSummary.Text)</pre>
+  </div>
+"@
+        [void]$infraBlocks.Add($replBlock)
+    }
+
+    $infraHtml = ($infraBlocks -join "`r`n")
+    if ([string]::IsNullOrWhiteSpace($infraHtml)) {
+        $infraHtml = @"
+  <div class="vendor">
+    <div class="empty">No infrastructure checks were run. Run without parameters on a domain
+    controller (or add <code>-ReplicationSummary</code>) to include the AD replication summary.</div>
+  </div>
+"@
+    }
+
     $html = @"
 <!DOCTYPE html>
 <html lang="en">
@@ -1359,6 +1439,43 @@ $sectionsHtml
   tr.missing td.version, tr.missing td.build { color: var(--error); }
   .empty { color: var(--muted); font-size: 13px; line-height: 1.7; }
   .empty code { color: var(--text); background: var(--panel2); padding: 1px 5px; border-radius: 4px; }
+
+  /* Tabs */
+  .tabs { display: flex; gap: 6px; margin-bottom: 22px; border-bottom: 1px solid var(--border); }
+  .tab {
+    appearance: none;
+    background: transparent;
+    border: none;
+    color: var(--muted);
+    font: inherit;
+    font-weight: 600;
+    padding: 10px 16px;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+  }
+  .tab:hover { color: var(--text); }
+  .tab.active { color: var(--text); border-bottom-color: var(--accent); }
+  .tabpane { display: none; }
+  .tabpane.active { display: block; }
+
+  .badge { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; border: 1px solid transparent; vertical-align: middle; }
+  .badge.ok { color: var(--ok); border-color: var(--ok); }
+  .badge.bad { color: var(--error); border-color: var(--error); }
+  .badge.muted { color: var(--muted); border-color: var(--muted); }
+  pre.checkout {
+    margin: 0;
+    padding: 14px 16px;
+    background: var(--panel2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow-x: auto;
+    font-family: Consolas, "Courier New", monospace;
+    font-size: 12.5px;
+    line-height: 1.5;
+    color: var(--text);
+    white-space: pre;
+  }
   footer { color: var(--muted); font-size: 12px; margin-top: 20px; line-height: 1.6; }
 </style>
 </head>
@@ -1367,14 +1484,25 @@ $sectionsHtml
   <h1>$(ConvertTo-HtmlText $Title)</h1>
   <div class="sub-line">Generated $generated on $(ConvertTo-HtmlText $env:COMPUTERNAME) by VersionTool v$(ConvertTo-HtmlText $script:ToolVersion)</div>
 
-  <div class="cards">
-    <div class="card ok"><div class="n">$installed</div><div class="l">Items found</div></div>
-    <div class="card"><div class="n">$vendors</div><div class="l">Vendors</div></div>
-    <div class="card"><div class="n">$servers</div><div class="l">Servers queried</div></div>
-    <div class="card error"><div class="n">$failed</div><div class="l">With no result</div></div>
+  <div class="tabs">
+    <button class="tab active" data-tab="tab-versions">Versions</button>
+    <button class="tab" data-tab="tab-infra">Infrastructure Check</button>
   </div>
 
+  <div id="tab-versions" class="tabpane active">
+    <div class="cards">
+      <div class="card ok"><div class="n">$installed</div><div class="l">Items found</div></div>
+      <div class="card"><div class="n">$vendors</div><div class="l">Vendors</div></div>
+      <div class="card"><div class="n">$servers</div><div class="l">Servers queried</div></div>
+      <div class="card error"><div class="n">$failed</div><div class="l">With no result</div></div>
+    </div>
+
 $vendorsHtml
+  </div>
+
+  <div id="tab-infra" class="tabpane">
+$infraHtml
+  </div>
 
   <footer>
     ManageEngine versions are read from conf\product.conf on disk (SMB, TCP 445 for a remote
@@ -1385,6 +1513,20 @@ $vendorsHtml
     when the exact patch level matters.
   </footer>
 </div>
+<script>
+  var tabs = document.querySelectorAll('.tab');
+  for (var i = 0; i < tabs.length; i++) {
+    tabs[i].addEventListener('click', function () {
+      var target = this.getAttribute('data-tab');
+      var t = document.querySelectorAll('.tab');
+      for (var j = 0; j < t.length; j++) { t[j].classList.remove('active'); }
+      var p = document.querySelectorAll('.tabpane');
+      for (var k = 0; k < p.length; k++) { p[k].classList.remove('active'); }
+      this.classList.add('active');
+      document.getElementById(target).classList.add('active');
+    });
+  }
+</script>
 </body>
 </html>
 "@
@@ -1571,12 +1713,31 @@ foreach ($winSrv in $winServers) {
     }
 }
 
-if ($results.Count -eq 0) {
+# ---- Infrastructure checks -------------------------------------------------
+# AD replication summary. Runs on a bare run (the user asked for "no parameters"),
+# on -ReplicationSummary, or when the config opts in.
+$wantRepl = [bool]$ReplicationSummary -or $targetsAreImplicit -or `
+            [bool](Get-ConfigValue -Object $config -Name 'replicationSummary' -Default $false)
+
+$replResult = $null
+if ($wantRepl) {
+    Write-Host "Running repadmin /replsum ..."
+    $replResult = Get-ReplicationSummary
+    if ($replResult.Available) {
+        if ($replResult.Ok) { Write-Host "  replication healthy" -ForegroundColor DarkGray }
+        else { Write-Warning "  replication summary reported failures - see the report" }
+    }
+    else {
+        Write-Verbose "  repadmin not available on this machine"
+    }
+}
+
+if ($results.Count -eq 0 -and -not $replResult) {
     Write-Host ""
     Write-Host "Nothing was selected to report. Try -DomainControllers, -VCenter <name>, or set servers/vcenters/windowsServers in config.json." -ForegroundColor Yellow
 }
 
-$reportPath = New-MeHtmlReport -Results $results.ToArray() -Title $reportTitle -Path $outFile
+$reportPath = New-MeHtmlReport -Results $results.ToArray() -Title $reportTitle -Path $outFile -ReplSummary $replResult
 Write-Host ""
 Write-Host "Report written to: $reportPath"
 
