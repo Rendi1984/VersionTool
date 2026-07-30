@@ -95,6 +95,8 @@ Options:
   and FSMO roles - all in the Infrastructure Check tab
 - `-WindowsServer <names>` - a Windows server's OS version in the Versions tab (for non-DC
   servers you want tracked alongside product versions)
+- `-All` - turn on every check at once: domain controllers, replication, FSMO and ESXi, plus
+  all ManageEngine servers, vCenters and Windows servers listed in the config
 - `-ReplicationSummary` - run `repadmin /replsum` and show it in the Infrastructure Check tab
 - `-FsmoRoles` - show the five FSMO role holders in the Infrastructure Check tab
 - `-NonInteractive` - never prompt and never install; skip anything that would need it
@@ -178,6 +180,11 @@ only when a version check was requested.
 
 A bare run therefore produces only the Infrastructure Check tab; asking for `servers`,
 `vcenters`, `windowsServers` or `-DomainControllers` adds the Versions tab.
+
+`-All` is a shortcut that enables every check the environment and config allow - the AD checks
+(which discover their own targets) always run, and the ManageEngine / VMware / Windows checks
+run for whatever is listed in the config. It does not invent servers: list them in the config
+for those regions to appear.
 
 Nothing in the report claims to know whether a newer release exists: there is no reference
 version and no status column, because the tool never contacts the vendors.

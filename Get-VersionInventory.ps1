@@ -58,6 +58,11 @@
     Discover every domain controller in the current domain and report each one's OS version.
     Combines with -WindowsServer / "windowsServers"; duplicates are checked once.
 
+.PARAMETER All
+    Turn on every check: domain controllers, AD replication, FSMO roles and ESXi hosts, plus
+    all ManageEngine servers, vCenters and Windows servers listed in the config. A shortcut
+    for the fullest report the current environment and config allow.
+
 .PARAMETER Show
     Open the report in the default browser when done.
 
@@ -90,6 +95,7 @@ param(
     [switch]$DomainControllers,
     [switch]$ReplicationSummary,
     [switch]$FsmoRoles,
+    [switch]$All,
     [switch]$InstallPowerCLI,
     [switch]$IncludeEsxi,
     [switch]$NonInteractive,
@@ -101,7 +107,7 @@ $ErrorActionPreference = 'Stop'
 
 # Keep in step with the VERSION file. Printed at startup and in the report so the running
 # copy identifies itself even if the file was renamed or copied elsewhere.
-$script:ToolVersion = '3.8.0'
+$script:ToolVersion = '3.9.0'
 
 # ---------------------------------------------------------------------------
 # Config
@@ -1804,7 +1810,7 @@ if ($vCenters) {
     $timeoutSec       = [int](Get-ConfigValue -Object $config -Name 'timeoutSec' -Default 30)
     $allowPrompt      = -not $NonInteractive
     # -IncludeEsxi wins; otherwise honour "includeEsxi" from the config.
-    $wantEsxi         = [bool]$IncludeEsxi -or [bool](Get-ConfigValue -Object $config -Name 'includeEsxi' -Default $false)
+    $wantEsxi         = [bool]$All -or [bool]$IncludeEsxi -or [bool](Get-ConfigValue -Object $config -Name 'includeEsxi' -Default $false)
 
     foreach ($vc in $vCenters) {
         Write-Host "Querying vCenter $vc ..."
@@ -1872,7 +1878,7 @@ $bareRun = -not $anyVersionCheck
 # Domain Controllers: discover them and read each one's OS version, into a separate
 # collection that the report renders as the first Infrastructure Check block.
 $dcResults = New-Object System.Collections.ArrayList
-$wantDcs = [bool]$DomainControllers -or [bool](Get-ConfigValue -Object $config -Name 'domainControllers' -Default $false)
+$wantDcs = [bool]$All -or [bool]$DomainControllers -or [bool](Get-ConfigValue -Object $config -Name 'domainControllers' -Default $false)
 if ($wantDcs) {
     Write-Host "Discovering domain controllers ..."
     $dcNames = @(Get-DomainControllerNames | Sort-Object -Unique)
@@ -1893,7 +1899,7 @@ if ($wantDcs) {
 }
 
 $replResult = $null
-if ([bool]$ReplicationSummary -or $bareRun -or $wantDcs -or [bool](Get-ConfigValue -Object $config -Name 'replicationSummary' -Default $false)) {
+if ([bool]$All -or [bool]$ReplicationSummary -or $bareRun -or $wantDcs -or [bool](Get-ConfigValue -Object $config -Name 'replicationSummary' -Default $false)) {
     Write-Host "Running repadmin /replsum ..."
     $replResult = Get-ReplicationSummary
     if ($replResult.Available) {
@@ -1906,7 +1912,7 @@ if ([bool]$ReplicationSummary -or $bareRun -or $wantDcs -or [bool](Get-ConfigVal
 }
 
 $fsmoResult = $null
-if ([bool]$FsmoRoles -or $bareRun -or $wantDcs -or [bool](Get-ConfigValue -Object $config -Name 'fsmoRoles' -Default $false)) {
+if ([bool]$All -or [bool]$FsmoRoles -or $bareRun -or $wantDcs -or [bool](Get-ConfigValue -Object $config -Name 'fsmoRoles' -Default $false)) {
     Write-Host "Reading FSMO role holders ..."
     $fsmoResult = Get-FsmoRoles
     if ($fsmoResult.Available) {
