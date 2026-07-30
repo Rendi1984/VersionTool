@@ -1,0 +1,15 @@
+{
+  "reportTitle": "Infrastructure Version Report",
+  "outputPath": "Version-Report.html",
+  "servers": [],
+  "searchRoots": [],
+  "vcenters": [],
+  "includeEsxi": false,
+  "windowsServers": [],
+  "domainControllers": false,
+  "replicationSummary": false,
+  "fsmoRoles": false,
+  "credentialFolder": "",
+  "skipCertificateCheck": true,
+  "timeoutSec": 30
+}
