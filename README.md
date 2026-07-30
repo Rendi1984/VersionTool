@@ -93,6 +93,7 @@ Options:
 - `-WindowsServer <names>` - Windows servers to report the OS version of
 - `-DomainControllers` - discover every DC in the domain and report each one's OS version
 - `-ReplicationSummary` - run `repadmin /replsum` and show it in the Infrastructure Check tab
+- `-FsmoRoles` - show the five FSMO role holders in the Infrastructure Check tab
 - `-NonInteractive` - never prompt and never install; skip anything that would need it
 - `-Show` - open the report when finished
 - `-Verbose` - log every root scanned, file read and API call attempted
@@ -127,6 +128,7 @@ is scanned.
   "windowsServers": [],
   "domainControllers": true,
   "replicationSummary": false,
+  "fsmoRoles": false,
   "credentialFolder": "",
   "skipCertificateCheck": true,
   "timeoutSec": 30
@@ -144,6 +146,7 @@ is scanned.
 | `windowsServers` | Windows servers to report the OS version of. Empty means the Windows check is skipped |
 | `domainControllers` | `true` auto-discovers every DC in the domain and reports its OS version |
 | `replicationSummary` | `true` runs `repadmin /replsum` and shows it under Infrastructure Check |
+| `fsmoRoles` | `true` shows the FSMO role holders under Infrastructure Check |
 | `credentialFolder` | Where encrypted vCenter credentials are stored. Empty means `credentials\` next to the script |
 | `skipCertificateCheck` | Accept vCenter's self-signed certificate. Default `true` |
 | `timeoutSec` | Per REST call. Default 30 |
@@ -156,24 +159,36 @@ Roots searched by default: `C:\ManageEngine`, `C:\Program Files\ManageEngine`,
 
 ## The report
 
-The report has two tabs:
+The report opens on the **Infrastructure Check** tab; a **Versions** tab appears next to it
+only when a version check was requested.
 
-- **Versions** - one region per vendor (ManageEngine, VMware, Windows), each subdivided by
-  server, with a row per item: name, version, build, IP address and where the values came
-  from. Summary cards count items found, vendors, servers queried and anything with no result.
-- **Infrastructure Check** - general health checks that are not a version. Today this is the
-  AD replication summary (`repadmin /replsum`), shown with a healthy / failures badge. It is
-  filled on a bare run (no parameters), with `-ReplicationSummary`, or `"replicationSummary": true`.
+- **Infrastructure Check** (always present, shown first) - general health checks that are not a
+  version, each in its own block:
+  - **FSMO role holders** - the five roles and which DC holds each.
+  - **AD replication** - `repadmin /replsum`, with a healthy / failures-detected badge.
+  These run on a bare run (no parameters), with `-FsmoRoles` / `-ReplicationSummary`, or the
+  matching config flags.
+- **Versions** (only when a version check is requested) - one region per vendor (ManageEngine,
+  VMware, Windows), subdivided by server, a row per item: name, version, build, IP address and
+  source. Summary cards count items found, vendors, servers queried and anything with no result.
+
+A bare run therefore produces only the Infrastructure Check tab; asking for `servers`,
+`vcenters`, `windowsServers` or `-DomainControllers` adds the Versions tab.
 
 Nothing in the report claims to know whether a newer release exists: there is no reference
 version and no status column, because the tool never contacts the vendors.
 
 ## Infrastructure Check: AD replication
 
-`repadmin /replsum` summarises replication health across all domain controllers. `repadmin`
-ships with the AD DS role and the RSAT AD DS tools, so it is present on a DC. The raw output is
-shown verbatim in the Infrastructure Check tab; a non-zero fails count flips the badge to
-"failures detected". If `repadmin` is not on the machine, the tab says so instead.
+**FSMO role holders** are read via the .NET ActiveDirectory classes (no RSAT), showing which DC
+holds each of Schema Master, Domain Naming Master, PDC Emulator, RID Master and Infrastructure
+Master.
+
+**AD replication** runs `repadmin /replsum`, which summarises replication health across all DCs.
+`repadmin` ships with the AD DS role / RSAT AD DS tools. If it is not on the machine running the
+script, a domain controller is located and `repadmin` is run there over PowerShell remoting
+(WinRM) instead - the block notes which host answered. A non-zero fails count flips the badge to
+"failures detected".
 
 ## Caveat: product.conf can lag behind a service pack
 

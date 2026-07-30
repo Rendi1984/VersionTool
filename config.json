@@ -8,6 +8,7 @@
   "windowsServers": [],
   "domainControllers": false,
   "replicationSummary": false,
+  "fsmoRoles": false,
   "credentialFolder": "",
   "skipCertificateCheck": true,
   "timeoutSec": 30

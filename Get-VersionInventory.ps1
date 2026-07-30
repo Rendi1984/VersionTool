@@ -89,6 +89,7 @@ param(
     [string[]]$WindowsServer,
     [switch]$DomainControllers,
     [switch]$ReplicationSummary,
+    [switch]$FsmoRoles,
     [switch]$InstallPowerCLI,
     [switch]$IncludeEsxi,
     [switch]$NonInteractive,
@@ -100,7 +101,7 @@ $ErrorActionPreference = 'Stop'
 
 # Keep in step with the VERSION file. Printed at startup and in the report so the running
 # copy identifies itself even if the file was renamed or copied elsewhere.
-$script:ToolVersion = '3.6.0'
+$script:ToolVersion = '3.7.0'
 
 # ---------------------------------------------------------------------------
 # Config
@@ -1037,46 +1038,100 @@ function Get-DomainControllerNames {
     }
 }
 
-function Get-ReplicationSummary {
+function Get-FsmoRoles {
     <#
-        Runs "repadmin /replsum" and returns its text. repadmin ships with the AD DS role
-        and the RSAT AD DS tools, so it is present on a domain controller. Returns an object
-        with Available (was repadmin found), Ok (no failures detected) and Text.
+        The five FSMO role holders of the current forest/domain, via the .NET
+        ActiveDirectory classes (no RSAT / AD module). Returns Available, Roles
+        (an ordered name->owner map) and Error.
     #>
-    if (-not (Get-Command 'repadmin.exe' -ErrorAction SilentlyContinue) -and
-        -not (Get-Command 'repadmin'     -ErrorAction SilentlyContinue)) {
-        return [pscustomobject]@{
-            Available = $false
-            Ok        = $false
-            Text      = 'repadmin was not found on this machine. It ships with the AD DS role and the RSAT AD DS tools - run this on a domain controller, or install RSAT.'
-        }
-    }
-
     try {
-        $raw = & repadmin /replsum 2>&1 | Out-String
+        $forest = [System.DirectoryServices.ActiveDirectory.Forest]::GetCurrentForest()
+        $domain = [System.DirectoryServices.ActiveDirectory.Domain]::GetCurrentDomain()
+
+        $roles = [ordered]@{
+            'Schema Master'         = [string]$forest.SchemaRoleOwner.Name
+            'Domain Naming Master'  = [string]$forest.NamingRoleOwner.Name
+            'PDC Emulator'          = [string]$domain.PdcRoleOwner.Name
+            'RID Master'            = [string]$domain.RidRoleOwner.Name
+            'Infrastructure Master' = [string]$domain.InfrastructureRoleOwner.Name
+        }
+
+        return [pscustomobject]@{ Available = $true; Roles = $roles; Error = $null }
     }
     catch {
         return [pscustomobject]@{
-            Available = $true
-            Ok        = $false
-            Text      = "repadmin /replsum failed: $($_.Exception.Message)"
+            Available = $false
+            Roles     = $null
+            Error     = "Could not read FSMO roles: $($_.Exception.Message). This needs a domain-joined machine with Active Directory reachable."
+        }
+    }
+}
+
+function Measure-ReplsumOk {
+    <#
+        The summary lists fails/total per DSA; a non-zero fail count means trouble.
+    #>
+    param([string]$Text)
+
+    foreach ($line in ($Text -split "`r?`n")) {
+        if ($line -match '(\d+)\s*/\s*(\d+)') {
+            if ([int]$Matches[1] -gt 0) { return $false }
+        }
+    }
+    return $true
+}
+
+function Get-ReplicationSummary {
+    <#
+        Runs "repadmin /replsum" and returns its text. repadmin ships with the AD DS role
+        and the RSAT AD DS tools, so it is present on a domain controller. If it is not on
+        this machine, a domain controller is located and repadmin is run there over
+        PowerShell remoting instead. Returns Available / Ok / Text / Host.
+    #>
+
+    # 1. Local repadmin.
+    if ((Get-Command 'repadmin.exe' -ErrorAction SilentlyContinue) -or
+        (Get-Command 'repadmin'     -ErrorAction SilentlyContinue)) {
+        try {
+            $raw  = & repadmin /replsum 2>&1 | Out-String
+            $text = ([string]$raw).Trim()
+            return [pscustomobject]@{
+                Available = $true
+                Ok        = (Measure-ReplsumOk -Text $text)
+                Text      = $text
+                Host      = $env:COMPUTERNAME
+            }
+        }
+        catch {
+            Write-Verbose "local repadmin failed: $($_.Exception.Message)"
         }
     }
 
-    $text = ([string]$raw).Trim()
-
-    # The summary lists fails/total per DSA; a non-zero fail count or error means trouble.
-    $ok = $true
-    foreach ($line in ($text -split "`r?`n")) {
-        if ($line -match '(\d+)\s*/\s*(\d+)') {
-            if ([int]$Matches[1] -gt 0) { $ok = $false; break }
+    # 2. No local repadmin - run it on a domain controller over PowerShell remoting.
+    Write-Verbose 'repadmin not found locally; locating a domain controller to run it remotely.'
+    foreach ($dc in @(Get-DomainControllerNames)) {
+        try {
+            $raw = Invoke-Command -ComputerName $dc -ScriptBlock { repadmin /replsum } -ErrorAction Stop | Out-String
+            $text = ([string]$raw).Trim()
+            if ($text) {
+                return [pscustomobject]@{
+                    Available = $true
+                    Ok        = (Measure-ReplsumOk -Text $text)
+                    Text      = $text
+                    Host      = $dc
+                }
+            }
+        }
+        catch {
+            Write-Verbose "[$dc] remote repadmin failed: $($_.Exception.Message)"
         }
     }
 
     return [pscustomobject]@{
-        Available = $true
-        Ok        = $ok
-        Text      = $text
+        Available = $false
+        Ok        = $false
+        Text      = 'repadmin was not found on this machine, and no domain controller could be reached to run it remotely (that path needs PowerShell remoting / WinRM to a DC). Run this on a DC, or install the RSAT AD DS tools.'
+        Host      = $null
     }
 }
 
@@ -1190,7 +1245,9 @@ function New-MeHtmlReport {
         [object[]]$Results,
         [string]$Title,
         [string]$Path,
-        $ReplSummary
+        $ReplSummary,
+        $Fsmo,
+        [bool]$ShowVersionsTab = $true
     )
 
     $generated = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
@@ -1307,6 +1364,48 @@ $sectionsHtml
 
     # ---- Infrastructure Check tab (general checks, e.g. AD replication) ------
     $infraBlocks = New-Object System.Collections.ArrayList
+
+    # FSMO role holders - its own block, first.
+    if ($null -ne $Fsmo) {
+        if ($Fsmo.Available) {
+            $fsmoRows = New-Object System.Collections.ArrayList
+            foreach ($role in $Fsmo.Roles.Keys) {
+                $rowHtml = @"
+      <tr>
+        <td class="product">$(ConvertTo-HtmlText $role)</td>
+        <td class="detail">$(ConvertTo-HtmlText ([string]$Fsmo.Roles[$role]))</td>
+      </tr>
+"@
+                [void]$fsmoRows.Add($rowHtml)
+            }
+            $fsmoBlock = @"
+  <div class="vendor">
+    <div class="vendor-head">
+      <span class="title">FSMO role holders</span>
+      <span class="meta">Active Directory</span>
+    </div>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Role</th><th>Holder</th></tr></thead>
+        <tbody>
+$($fsmoRows -join "`r`n")
+        </tbody>
+      </table>
+    </div>
+  </div>
+"@
+        }
+        else {
+            $fsmoBlock = @"
+  <div class="vendor">
+    <div class="vendor-head"><span class="title">FSMO role holders</span><span class="meta">Active Directory</span></div>
+    <div class="empty">$(ConvertTo-HtmlText $Fsmo.Error)</div>
+  </div>
+"@
+        }
+        [void]$infraBlocks.Add($fsmoBlock)
+    }
+
     if ($null -ne $ReplSummary) {
         if ($ReplSummary.Available -and $ReplSummary.Ok) {
             $badge = '<span class="badge ok">healthy</span>'
@@ -1318,11 +1417,13 @@ $sectionsHtml
             $badge = '<span class="badge muted">not available</span>'
         }
 
+        $replVia = ''
+        if ($ReplSummary.Host) { $replVia = " on $(ConvertTo-HtmlText $ReplSummary.Host)" }
         $replBlock = @"
   <div class="vendor">
     <div class="vendor-head">
       <span class="title">Active Directory replication</span>
-      <span class="meta">repadmin /replsum $badge</span>
+      <span class="meta">repadmin /replsum$replVia $badge</span>
     </div>
     <pre class="checkout">$(ConvertTo-HtmlText $ReplSummary.Text)</pre>
   </div>
@@ -1338,6 +1439,28 @@ $sectionsHtml
     controller (or add <code>-ReplicationSummary</code>) to include the AD replication summary.</div>
   </div>
 "@
+    }
+
+    $versionsPane = @"
+  <div id="tab-versions" class="tabpane">
+    <div class="cards">
+      <div class="card ok"><div class="n">$installed</div><div class="l">Items found</div></div>
+      <div class="card"><div class="n">$vendors</div><div class="l">Vendors</div></div>
+      <div class="card"><div class="n">$servers</div><div class="l">Servers queried</div></div>
+      <div class="card error"><div class="n">$failed</div><div class="l">With no result</div></div>
+    </div>
+
+$vendorsHtml
+  </div>
+"@
+
+    # Infrastructure Check is the first (leftmost) tab and active by default. The Versions
+    # tab is only produced when a version check was actually requested.
+    $tabButtons = '    <button class="tab active" data-tab="tab-infra">Infrastructure Check</button>'
+    $panes      = "  <div id=`"tab-infra`" class=`"tabpane active`">`r`n$infraHtml`r`n  </div>"
+    if ($ShowVersionsTab) {
+        $tabButtons += "`r`n    <button class=`"tab`" data-tab=`"tab-versions`">Versions</button>"
+        $panes      += "`r`n$versionsPane"
     }
 
     $html = @"
@@ -1485,24 +1608,10 @@ $sectionsHtml
   <div class="sub-line">Generated $generated on $(ConvertTo-HtmlText $env:COMPUTERNAME) by VersionTool v$(ConvertTo-HtmlText $script:ToolVersion)</div>
 
   <div class="tabs">
-    <button class="tab active" data-tab="tab-versions">Versions</button>
-    <button class="tab" data-tab="tab-infra">Infrastructure Check</button>
+$tabButtons
   </div>
 
-  <div id="tab-versions" class="tabpane active">
-    <div class="cards">
-      <div class="card ok"><div class="n">$installed</div><div class="l">Items found</div></div>
-      <div class="card"><div class="n">$vendors</div><div class="l">Vendors</div></div>
-      <div class="card"><div class="n">$servers</div><div class="l">Servers queried</div></div>
-      <div class="card error"><div class="n">$failed</div><div class="l">With no result</div></div>
-    </div>
-
-$vendorsHtml
-  </div>
-
-  <div id="tab-infra" class="tabpane">
-$infraHtml
-  </div>
+$panes
 
   <footer>
     ManageEngine versions are read from conf\product.conf on disk (SMB, TCP 445 for a remote
@@ -1564,28 +1673,22 @@ if (-not [System.IO.Path]::IsPathRooted($outFile)) {
 
 $extraRoots = @(Get-ConfigValue -Object $config -Name 'searchRoots' -Default @())
 
-# Is any VMware or Windows check requested? If so, an empty ManageEngine server list
-# means "no ManageEngine scan" rather than "scan the local machine" - otherwise a run
-# aimed only at DCs or vCenter would add a noisy "No products found" ManageEngine row
-# for the local box.
+# Which version checks were requested? ManageEngine servers, vCenters, Windows servers or
+# DC discovery. The Versions tab is produced only when at least one of these is asked for -
+# a bare run has no Versions tab, just Infrastructure Check.
+$meConfigured  = @(@($ComputerName) + @(Get-ConfigValue -Object $config -Name 'servers' -Default @()) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 $vcConfigured  = @(@($VCenter) + @(Get-ConfigValue -Object $config -Name 'vcenters' -Default @()) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 $winConfigured = @(@($WindowsServer) + @(Get-ConfigValue -Object $config -Name 'windowsServers' -Default @()) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 $dcConfigured  = [bool]$DomainControllers -or [bool](Get-ConfigValue -Object $config -Name 'domainControllers' -Default $false)
-$otherChecks   = ($vcConfigured.Count -gt 0) -or ($winConfigured.Count -gt 0) -or $dcConfigured
 
-# -ComputerName wins over the config; an empty list means this machine.
-# Boolean tests instead of .Count: a PowerShell function that returns a one-element
-# array unrolls it to a scalar, and .Count on a scalar throws under Set-StrictMode.
+$anyVersionCheck = ($meConfigured.Count -gt 0) -or ($vcConfigured.Count -gt 0) -or ($winConfigured.Count -gt 0) -or $dcConfigured
+
+# ManageEngine targets: -ComputerName, else the config list. No local-machine fallback -
+# scanning the local box for ManageEngine only happens when it is explicitly named.
 $targets = @($ComputerName | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 if (-not $targets) {
     $fromConfig = Get-ConfigValue -Object $config -Name 'servers' -Default @()
     $targets = @($fromConfig | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-}
-# Fall back to the local machine only when nothing else was asked for.
-$targetsAreImplicit = $false
-if (-not $targets -and -not $otherChecks) {
-    $targets = @($env:COMPUTERNAME)
-    $targetsAreImplicit = $true
 }
 
 $results = New-Object System.Collections.ArrayList
@@ -1596,14 +1699,6 @@ foreach ($target in $targets) {
     $found = @(Get-MeProductsOnServer -Computer ([string]$target) -ExtraRoots $extraRoots)
 
     foreach ($record in $found) {
-        # A "no products found" result for the machine we only scanned by default (not
-        # because it was asked for) is noise - drop it so a bare run on, say, a DC does not
-        # report an empty ManageEngine section. Explicitly-named servers still show it.
-        if (-not $record.Found -and $targetsAreImplicit) {
-            Write-Verbose "[$target] no ManageEngine products; omitted (local machine was scanned by default)."
-            continue
-        }
-
         if ($record.Found -and $Product) {
             $matched = $false
             foreach ($wanted in $Product) {
@@ -1714,13 +1809,12 @@ foreach ($winSrv in $winServers) {
 }
 
 # ---- Infrastructure checks -------------------------------------------------
-# AD replication summary. Runs on a bare run (the user asked for "no parameters"),
-# on -ReplicationSummary, or when the config opts in.
-$wantRepl = [bool]$ReplicationSummary -or $targetsAreImplicit -or `
-            [bool](Get-ConfigValue -Object $config -Name 'replicationSummary' -Default $false)
+# These run on a bare run (the user asked for "no parameters"), on their own switch,
+# or when the config opts in.
+$bareRun = -not $anyVersionCheck
 
 $replResult = $null
-if ($wantRepl) {
+if ([bool]$ReplicationSummary -or $bareRun -or [bool](Get-ConfigValue -Object $config -Name 'replicationSummary' -Default $false)) {
     Write-Host "Running repadmin /replsum ..."
     $replResult = Get-ReplicationSummary
     if ($replResult.Available) {
@@ -1728,16 +1822,31 @@ if ($wantRepl) {
         else { Write-Warning "  replication summary reported failures - see the report" }
     }
     else {
-        Write-Verbose "  repadmin not available on this machine"
+        Write-Verbose "  repadmin not available and no DC reachable"
     }
 }
 
-if ($results.Count -eq 0 -and -not $replResult) {
+$fsmoResult = $null
+if ([bool]$FsmoRoles -or $bareRun -or [bool](Get-ConfigValue -Object $config -Name 'fsmoRoles' -Default $false)) {
+    Write-Host "Reading FSMO role holders ..."
+    $fsmoResult = Get-FsmoRoles
+    if ($fsmoResult.Available) {
+        foreach ($role in $fsmoResult.Roles.Keys) {
+            Write-Host ("  {0,-22} {1}" -f $role, $fsmoResult.Roles[$role]) -ForegroundColor DarkGray
+        }
+    }
+    else {
+        Write-Warning ("  {0}" -f $fsmoResult.Error)
+    }
+}
+
+if ($results.Count -eq 0 -and -not $replResult -and -not $fsmoResult) {
     Write-Host ""
     Write-Host "Nothing was selected to report. Try -DomainControllers, -VCenter <name>, or set servers/vcenters/windowsServers in config.json." -ForegroundColor Yellow
 }
 
-$reportPath = New-MeHtmlReport -Results $results.ToArray() -Title $reportTitle -Path $outFile -ReplSummary $replResult
+$reportPath = New-MeHtmlReport -Results $results.ToArray() -Title $reportTitle -Path $outFile `
+                -ReplSummary $replResult -Fsmo $fsmoResult -ShowVersionsTab $anyVersionCheck
 Write-Host ""
 Write-Host "Report written to: $reportPath"
 
