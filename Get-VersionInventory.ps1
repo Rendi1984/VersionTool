@@ -99,7 +99,7 @@ $ErrorActionPreference = 'Stop'
 
 # Keep in step with the VERSION file. Printed at startup and in the report so the running
 # copy identifies itself even if the file was renamed or copied elsewhere.
-$script:ToolVersion = '3.5.0'
+$script:ToolVersion = '3.5.1'
 
 # ---------------------------------------------------------------------------
 # Config
@@ -1411,6 +1411,15 @@ if (-not [System.IO.Path]::IsPathRooted($outFile)) {
 
 $extraRoots = @(Get-ConfigValue -Object $config -Name 'searchRoots' -Default @())
 
+# Is any VMware or Windows check requested? If so, an empty ManageEngine server list
+# means "no ManageEngine scan" rather than "scan the local machine" - otherwise a run
+# aimed only at DCs or vCenter would add a noisy "No products found" ManageEngine row
+# for the local box.
+$vcConfigured  = @(@($VCenter) + @(Get-ConfigValue -Object $config -Name 'vcenters' -Default @()) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+$winConfigured = @(@($WindowsServer) + @(Get-ConfigValue -Object $config -Name 'windowsServers' -Default @()) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+$dcConfigured  = [bool]$DomainControllers -or [bool](Get-ConfigValue -Object $config -Name 'domainControllers' -Default $false)
+$otherChecks   = ($vcConfigured.Count -gt 0) -or ($winConfigured.Count -gt 0) -or $dcConfigured
+
 # -ComputerName wins over the config; an empty list means this machine.
 # Boolean tests instead of .Count: a PowerShell function that returns a one-element
 # array unrolls it to a scalar, and .Count on a scalar throws under Set-StrictMode.
@@ -1419,7 +1428,8 @@ if (-not $targets) {
     $fromConfig = Get-ConfigValue -Object $config -Name 'servers' -Default @()
     $targets = @($fromConfig | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 }
-if (-not $targets) { $targets = @($env:COMPUTERNAME) }
+# Fall back to the local machine only when nothing else was asked for.
+if (-not $targets -and -not $otherChecks) { $targets = @($env:COMPUTERNAME) }
 
 $results = New-Object System.Collections.ArrayList
 
