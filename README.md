@@ -11,7 +11,8 @@ Supported today:
 |---|---|---|
 | **ManageEngine** | Every product found - ADAudit Plus, ADSelfService Plus, Key Manager Plus, ADManager Plus, ... | Reads `conf\product.conf` on disk. No credentials |
 | **VMware** | vCenter Server, and the ESXi hosts it manages | vSphere REST API, falling back to PowerCLI. Needs credentials |
-| **Windows** | The OS version of any Windows server (e.g. Domain Controllers) - what `winver` shows | Registry (remote registry for a remote server), falling back to WMI |
+| **Windows** | The OS version of a Windows server - what `winver` shows | Registry (remote registry for a remote server), falling back to WMI |
+| **Active Directory** | Domain controller OS versions, replication health, FSMO roles | Registry/WMI, `repadmin /replsum`, .NET AD classes |
 
 There is no ManageEngine product list to maintain: everything found under the installation
 roots is reported, so a product installed later shows up on its own.
@@ -90,8 +91,10 @@ Options:
 - `-VCenter <names>` - vCenter servers to query, overriding the config
 - `-InstallPowerCLI` - agree up front to installing PowerCLI if it is needed
 - `-IncludeEsxi` - also report the ESXi hosts each vCenter manages, with their versions
-- `-WindowsServer <names>` - Windows servers to report the OS version of
-- `-DomainControllers` - discover every DC in the domain and report each one's OS version
+- `-DomainControllers` - discover every DC in the domain and report its OS version, replication
+  and FSMO roles - all in the Infrastructure Check tab
+- `-WindowsServer <names>` - a Windows server's OS version in the Versions tab (for non-DC
+  servers you want tracked alongside product versions)
 - `-ReplicationSummary` - run `repadmin /replsum` and show it in the Infrastructure Check tab
 - `-FsmoRoles` - show the five FSMO role holders in the Infrastructure Check tab
 - `-NonInteractive` - never prompt and never install; skip anything that would need it
@@ -163,11 +166,12 @@ The report opens on the **Infrastructure Check** tab; a **Versions** tab appears
 only when a version check was requested.
 
 - **Infrastructure Check** (always present, shown first) - general health checks that are not a
-  version, each in its own block:
-  - **FSMO role holders** - the five roles and which DC holds each.
+  version, each in its own block, in this order:
+  - **Domain Controllers** - each DC with its OS version and build (`-DomainControllers`).
   - **AD replication** - `repadmin /replsum`, with a healthy / failures-detected badge.
-  These run on a bare run (no parameters), with `-FsmoRoles` / `-ReplicationSummary`, or the
-  matching config flags.
+  - **FSMO role holders** - the five roles and which DC holds each.
+  These run on a bare run (no parameters), on `-DomainControllers`, with
+  `-ReplicationSummary` / `-FsmoRoles`, or the matching config flags.
 - **Versions** (only when a version check is requested) - one region per vendor (ManageEngine,
   VMware, Windows), subdivided by server, a row per item: name, version, build, IP address and
   source. Summary cards count items found, vendors, servers queried and anything with no result.

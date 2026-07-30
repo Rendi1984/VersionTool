@@ -101,7 +101,7 @@ $ErrorActionPreference = 'Stop'
 
 # Keep in step with the VERSION file. Printed at startup and in the report so the running
 # copy identifies itself even if the file was renamed or copied elsewhere.
-$script:ToolVersion = '3.7.1'
+$script:ToolVersion = '3.8.0'
 
 # ---------------------------------------------------------------------------
 # Config
@@ -1247,6 +1247,7 @@ function New-MeHtmlReport {
         [string]$Path,
         $ReplSummary,
         $Fsmo,
+        [object[]]$DcResults,
         [bool]$ShowVersionsTab = $true
     )
 
@@ -1362,9 +1363,73 @@ $sectionsHtml
 "@
     }
 
-    # ---- Infrastructure Check tab (general checks, e.g. AD replication) ------
-    # Order: AD replication first, then FSMO role holders.
+    # ---- Infrastructure Check tab (general checks) --------------------------
+    # Order: Domain Controllers, then AD replication, then FSMO role holders.
     $infraBlocks = New-Object System.Collections.ArrayList
+
+    if ($DcResults -and @($DcResults).Count -gt 0) {
+        $dcRows = New-Object System.Collections.ArrayList
+        foreach ($d in (@($DcResults) | Sort-Object Server)) {
+            $dcIp = $d.IPAddress
+            if ([string]::IsNullOrWhiteSpace($dcIp)) { $dcIp = '-' }
+
+            if (-not $d.Found) {
+                $rowHtml = @"
+      <tr class="missing">
+        <td class="product">$(ConvertTo-HtmlText $d.Server)</td>
+        <td>-</td>
+        <td class="version">-</td>
+        <td class="build">-</td>
+        <td>$(ConvertTo-HtmlText $dcIp)</td>
+        <td class="detail">$(ConvertTo-HtmlText $d.Error)</td>
+      </tr>
+"@
+            }
+            else {
+                $dcVer = $d.Version; if ([string]::IsNullOrWhiteSpace($dcVer)) { $dcVer = '-' }
+                $dcBld = $d.Build;   if ([string]::IsNullOrWhiteSpace($dcBld)) { $dcBld = '-' }
+                $rowHtml = @"
+      <tr>
+        <td class="product">$(ConvertTo-HtmlText $d.Server)</td>
+        <td>$(ConvertTo-HtmlText $d.Name)</td>
+        <td class="version">$(ConvertTo-HtmlText $dcVer)</td>
+        <td class="build">$(ConvertTo-HtmlText $dcBld)</td>
+        <td>$(ConvertTo-HtmlText $dcIp)</td>
+        <td class="detail">$(ConvertTo-HtmlText $d.Source)</td>
+      </tr>
+"@
+            }
+            [void]$dcRows.Add($rowHtml)
+        }
+
+        $dcCount = @(@($DcResults) | Where-Object { $_.Found }).Count
+        $dcBlock = @"
+  <div class="vendor">
+    <div class="vendor-head">
+      <span class="title">Domain Controllers</span>
+      <span class="meta">$dcCount controller(s)</span>
+    </div>
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Server</th>
+            <th>Operating system</th>
+            <th>Version</th>
+            <th>Build</th>
+            <th>IP address</th>
+            <th>Source</th>
+          </tr>
+        </thead>
+        <tbody>
+$($dcRows -join "`r`n")
+        </tbody>
+      </table>
+    </div>
+  </div>
+"@
+        [void]$infraBlocks.Add($dcBlock)
+    }
 
     $fsmoBlock = $null
     if ($null -ne $Fsmo) {
@@ -1676,15 +1741,15 @@ if (-not [System.IO.Path]::IsPathRooted($outFile)) {
 
 $extraRoots = @(Get-ConfigValue -Object $config -Name 'searchRoots' -Default @())
 
-# Which version checks were requested? ManageEngine servers, vCenters, Windows servers or
-# DC discovery. The Versions tab is produced only when at least one of these is asked for -
-# a bare run has no Versions tab, just Infrastructure Check.
+# Which version checks were requested? ManageEngine servers, vCenters or explicit Windows
+# servers. The Versions tab is produced only when one of these is asked for. Domain
+# controllers are NOT here - they are an Infrastructure Check, not a Versions entry - so a
+# run with only -DomainControllers has just the Infrastructure Check tab.
 $meConfigured  = @(@($ComputerName) + @(Get-ConfigValue -Object $config -Name 'servers' -Default @()) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 $vcConfigured  = @(@($VCenter) + @(Get-ConfigValue -Object $config -Name 'vcenters' -Default @()) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 $winConfigured = @(@($WindowsServer) + @(Get-ConfigValue -Object $config -Name 'windowsServers' -Default @()) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-$dcConfigured  = [bool]$DomainControllers -or [bool](Get-ConfigValue -Object $config -Name 'domainControllers' -Default $false)
 
-$anyVersionCheck = ($meConfigured.Count -gt 0) -or ($vcConfigured.Count -gt 0) -or ($winConfigured.Count -gt 0) -or $dcConfigured
+$anyVersionCheck = ($meConfigured.Count -gt 0) -or ($vcConfigured.Count -gt 0) -or ($winConfigured.Count -gt 0)
 
 # ManageEngine targets: -ComputerName, else the config list. No local-machine fallback -
 # scanning the local box for ManageEngine only happens when it is explicitly named.
@@ -1775,25 +1840,12 @@ if ($vCenters) {
     }
 }
 
-# ---- Windows OS versions (e.g. Domain Controllers) -------------------------
+# ---- Windows OS versions of explicitly-named servers (Versions tab) ---------
 $winServers = @($WindowsServer | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 if (-not $winServers) {
     $fromConfig = Get-ConfigValue -Object $config -Name 'windowsServers' -Default @()
     $winServers = @($fromConfig | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 }
-
-# Auto-discover every domain controller when asked, and merge with any explicit list.
-$wantDcs = [bool]$DomainControllers -or [bool](Get-ConfigValue -Object $config -Name 'domainControllers' -Default $false)
-if ($wantDcs) {
-    Write-Host "Discovering domain controllers ..."
-    $dcNames = @(Get-DomainControllerNames)
-    if ($dcNames.Count -gt 0) {
-        Write-Host ("  found: {0}" -f ($dcNames -join ', ')) -ForegroundColor DarkGray
-    }
-    $winServers = @($winServers + $dcNames)
-}
-
-# De-duplicate, case-insensitively, so a DC listed both ways is checked once.
 $winServers = @($winServers | Sort-Object -Unique)
 
 foreach ($winSrv in $winServers) {
@@ -1812,12 +1864,36 @@ foreach ($winSrv in $winServers) {
 }
 
 # ---- Infrastructure checks -------------------------------------------------
-# These run on a bare run (the user asked for "no parameters"), on their own switch,
+# Domain Controllers, replication and FSMO belong to the Infrastructure Check tab,
+# not to Versions. They run on a bare run, on -DomainControllers, on their own switch,
 # or when the config opts in.
 $bareRun = -not $anyVersionCheck
 
+# Domain Controllers: discover them and read each one's OS version, into a separate
+# collection that the report renders as the first Infrastructure Check block.
+$dcResults = New-Object System.Collections.ArrayList
+$wantDcs = [bool]$DomainControllers -or [bool](Get-ConfigValue -Object $config -Name 'domainControllers' -Default $false)
+if ($wantDcs) {
+    Write-Host "Discovering domain controllers ..."
+    $dcNames = @(Get-DomainControllerNames | Sort-Object -Unique)
+    if ($dcNames.Count -gt 0) {
+        Write-Host ("  found: {0}" -f ($dcNames -join ', ')) -ForegroundColor DarkGray
+    }
+    foreach ($dc in $dcNames) {
+        Write-Host "Checking Windows OS on $dc ..."
+        $record = Get-WindowsOSVersion -Computer ([string]$dc)
+        [void]$dcResults.Add($record)
+        if ($record.Found) {
+            Write-Host ("  {0} - version {1} (build {2})" -f $record.Name, $record.Version, $record.Build)
+        }
+        else {
+            Write-Warning ("{0}: {1}" -f $dc, $record.Error)
+        }
+    }
+}
+
 $replResult = $null
-if ([bool]$ReplicationSummary -or $bareRun -or [bool](Get-ConfigValue -Object $config -Name 'replicationSummary' -Default $false)) {
+if ([bool]$ReplicationSummary -or $bareRun -or $wantDcs -or [bool](Get-ConfigValue -Object $config -Name 'replicationSummary' -Default $false)) {
     Write-Host "Running repadmin /replsum ..."
     $replResult = Get-ReplicationSummary
     if ($replResult.Available) {
@@ -1830,7 +1906,7 @@ if ([bool]$ReplicationSummary -or $bareRun -or [bool](Get-ConfigValue -Object $c
 }
 
 $fsmoResult = $null
-if ([bool]$FsmoRoles -or $bareRun -or [bool](Get-ConfigValue -Object $config -Name 'fsmoRoles' -Default $false)) {
+if ([bool]$FsmoRoles -or $bareRun -or $wantDcs -or [bool](Get-ConfigValue -Object $config -Name 'fsmoRoles' -Default $false)) {
     Write-Host "Reading FSMO role holders ..."
     $fsmoResult = Get-FsmoRoles
     if ($fsmoResult.Available) {
@@ -1843,13 +1919,14 @@ if ([bool]$FsmoRoles -or $bareRun -or [bool](Get-ConfigValue -Object $config -Na
     }
 }
 
-if ($results.Count -eq 0 -and -not $replResult -and -not $fsmoResult) {
+if ($results.Count -eq 0 -and $dcResults.Count -eq 0 -and -not $replResult -and -not $fsmoResult) {
     Write-Host ""
     Write-Host "Nothing was selected to report. Try -DomainControllers, -VCenter <name>, or set servers/vcenters/windowsServers in config.json." -ForegroundColor Yellow
 }
 
 $reportPath = New-MeHtmlReport -Results $results.ToArray() -Title $reportTitle -Path $outFile `
-                -ReplSummary $replResult -Fsmo $fsmoResult -ShowVersionsTab $anyVersionCheck
+                -ReplSummary $replResult -Fsmo $fsmoResult -DcResults $dcResults.ToArray() `
+                -ShowVersionsTab $anyVersionCheck
 Write-Host ""
 Write-Host "Report written to: $reportPath"
 
