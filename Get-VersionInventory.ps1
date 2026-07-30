@@ -99,7 +99,7 @@ $ErrorActionPreference = 'Stop'
 
 # Keep in step with the VERSION file. Printed at startup and in the report so the running
 # copy identifies itself even if the file was renamed or copied elsewhere.
-$script:ToolVersion = '3.5.1'
+$script:ToolVersion = '3.5.2'
 
 # ---------------------------------------------------------------------------
 # Config
@@ -1250,6 +1250,15 @@ $sectionsHtml
     }
 
     $vendorsHtml = ($vendorBlocks -join "`r`n")
+    if ([string]::IsNullOrWhiteSpace($vendorsHtml)) {
+        $vendorsHtml = @"
+  <div class="vendor">
+    <div class="empty">Nothing was selected to report. Run with <code>-DomainControllers</code> for the DCs' OS,
+    <code>-VCenter &lt;name&gt;</code> for vCenter/ESXi, or set <code>servers</code> / <code>vcenters</code> /
+    <code>windowsServers</code> in config.json.</div>
+  </div>
+"@
+    }
 
     $html = @"
 <!DOCTYPE html>
@@ -1348,6 +1357,8 @@ $sectionsHtml
   td.build { font-variant-numeric: tabular-nums; }
   td.detail { color: var(--muted); font-size: 12px; max-width: 380px; word-break: break-word; }
   tr.missing td.version, tr.missing td.build { color: var(--error); }
+  .empty { color: var(--muted); font-size: 13px; line-height: 1.7; }
+  .empty code { color: var(--text); background: var(--panel2); padding: 1px 5px; border-radius: 4px; }
   footer { color: var(--muted); font-size: 12px; margin-top: 20px; line-height: 1.6; }
 </style>
 </head>
@@ -1429,7 +1440,11 @@ if (-not $targets) {
     $targets = @($fromConfig | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 }
 # Fall back to the local machine only when nothing else was asked for.
-if (-not $targets -and -not $otherChecks) { $targets = @($env:COMPUTERNAME) }
+$targetsAreImplicit = $false
+if (-not $targets -and -not $otherChecks) {
+    $targets = @($env:COMPUTERNAME)
+    $targetsAreImplicit = $true
+}
 
 $results = New-Object System.Collections.ArrayList
 
@@ -1439,6 +1454,14 @@ foreach ($target in $targets) {
     $found = @(Get-MeProductsOnServer -Computer ([string]$target) -ExtraRoots $extraRoots)
 
     foreach ($record in $found) {
+        # A "no products found" result for the machine we only scanned by default (not
+        # because it was asked for) is noise - drop it so a bare run on, say, a DC does not
+        # report an empty ManageEngine section. Explicitly-named servers still show it.
+        if (-not $record.Found -and $targetsAreImplicit) {
+            Write-Verbose "[$target] no ManageEngine products; omitted (local machine was scanned by default)."
+            continue
+        }
+
         if ($record.Found -and $Product) {
             $matched = $false
             foreach ($wanted in $Product) {
@@ -1546,6 +1569,11 @@ foreach ($winSrv in $winServers) {
     else {
         Write-Warning ("{0}: {1}" -f $winSrv, $record.Error)
     }
+}
+
+if ($results.Count -eq 0) {
+    Write-Host ""
+    Write-Host "Nothing was selected to report. Try -DomainControllers, -VCenter <name>, or set servers/vcenters/windowsServers in config.json." -ForegroundColor Yellow
 }
 
 $reportPath = New-MeHtmlReport -Results $results.ToArray() -Title $reportTitle -Path $outFile
