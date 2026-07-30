@@ -41,7 +41,13 @@
     Servers to inventory, overriding the "servers" list in config.json.
 
 .PARAMETER Product
-    Report only products whose name contains one of these strings, case-insensitively.
+    Report only ManageEngine products whose name contains one of these strings.
+
+.PARAMETER System
+    Pick which systems to check, from a fixed list (tab-completes): ManageEngine, VMware,
+    Windows, DomainControllers, Replication, FSMO, or All. When given, only the chosen ones
+    run; without it, everything that is configured runs. ManageEngine / VMware / Windows still
+    take their targets from the config lists.
 
 .PARAMETER OutputPath
     Path of the HTML report. Overrides "outputPath" from the config.
@@ -91,6 +97,8 @@ param(
     [string[]]$Product,
     [string]$OutputPath,
     [string]$Title,
+    [ValidateSet('All', 'ManageEngine', 'VMware', 'Windows', 'DomainControllers', 'Replication', 'FSMO')]
+    [string[]]$System,
     [string[]]$VCenter,
     [string[]]$WindowsServer,
     [switch]$DomainControllers,
@@ -108,7 +116,7 @@ $ErrorActionPreference = 'Stop'
 
 # Keep in step with the VERSION file. Printed at startup and in the report so the running
 # copy identifies itself even if the file was renamed or copied elsewhere.
-$script:ToolVersion = '3.9.2'
+$script:ToolVersion = '3.10.0'
 
 # ---------------------------------------------------------------------------
 # Config
@@ -1748,22 +1756,35 @@ if (-not [System.IO.Path]::IsPathRooted($outFile)) {
 
 $extraRoots = @(Get-ConfigValue -Object $config -Name 'searchRoots' -Default @())
 
-# Which version checks were requested? ManageEngine servers, vCenters or explicit Windows
-# servers. The Versions tab is produced only when one of these is asked for. Domain
-# controllers are NOT here - they are an Infrastructure Check, not a Versions entry - so a
-# run with only -DomainControllers has just the Infrastructure Check tab.
-$meConfigured  = @(@($ComputerName) + @(Get-ConfigValue -Object $config -Name 'servers' -Default @()) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-$vcConfigured  = @(@($VCenter) + @(Get-ConfigValue -Object $config -Name 'vcenters' -Default @()) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-$winConfigured = @(@($WindowsServer) + @(Get-ConfigValue -Object $config -Name 'windowsServers' -Default @()) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+# -System picks which systems to check from a fixed list. Without it, everything configured
+# runs; with it, only the chosen systems do. 'All' (and the -All switch) select everything.
+$selected  = @($System)
+$selectAll = [bool]$All -or ($selected.Count -eq 0) -or ($selected -contains 'All')
+$selME   = $selectAll -or ($selected -contains 'ManageEngine')
+$selVM   = $selectAll -or ($selected -contains 'VMware')
+$selWin  = $selectAll -or ($selected -contains 'Windows')
+$selDC   = $selectAll -or ($selected -contains 'DomainControllers')
+$selRepl = $selectAll -or ($selected -contains 'Replication')
+$selFsmo = $selectAll -or ($selected -contains 'FSMO')
+
+# Which version checks will run? ManageEngine servers, vCenters or explicit Windows servers,
+# each only if selected. The Versions tab is produced only when one of these has targets.
+# Domain controllers are NOT here - they are an Infrastructure Check, not a Versions entry.
+$meConfigured  = if ($selME)  { @(@($ComputerName) + @(Get-ConfigValue -Object $config -Name 'servers' -Default @()) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) } else { @() }
+$vcConfigured  = if ($selVM)  { @(@($VCenter) + @(Get-ConfigValue -Object $config -Name 'vcenters' -Default @()) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) } else { @() }
+$winConfigured = if ($selWin) { @(@($WindowsServer) + @(Get-ConfigValue -Object $config -Name 'windowsServers' -Default @()) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) } else { @() }
 
 $anyVersionCheck = ($meConfigured.Count -gt 0) -or ($vcConfigured.Count -gt 0) -or ($winConfigured.Count -gt 0)
 
 # ManageEngine targets: -ComputerName, else the config list. No local-machine fallback -
 # scanning the local box for ManageEngine only happens when it is explicitly named.
-$targets = @($ComputerName | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-if (-not $targets) {
-    $fromConfig = Get-ConfigValue -Object $config -Name 'servers' -Default @()
-    $targets = @($fromConfig | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+$targets = @()
+if ($selME) {
+    $targets = @($ComputerName | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if (-not $targets) {
+        $fromConfig = Get-ConfigValue -Object $config -Name 'servers' -Default @()
+        $targets = @($fromConfig | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    }
 }
 
 $results = New-Object System.Collections.ArrayList
@@ -1799,10 +1820,13 @@ foreach ($target in $targets) {
 }
 
 # ---- VMware ----------------------------------------------------------------
-$vCenters = @($VCenter | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-if (-not $vCenters) {
-    $fromConfig = Get-ConfigValue -Object $config -Name 'vcenters' -Default @()
-    $vCenters = @($fromConfig | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+$vCenters = @()
+if ($selVM) {
+    $vCenters = @($VCenter | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if (-not $vCenters) {
+        $fromConfig = Get-ConfigValue -Object $config -Name 'vcenters' -Default @()
+        $vCenters = @($fromConfig | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    }
 }
 
 if ($vCenters) {
@@ -1848,12 +1872,15 @@ if ($vCenters) {
 }
 
 # ---- Windows OS versions of explicitly-named servers (Versions tab) ---------
-$winServers = @($WindowsServer | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-if (-not $winServers) {
-    $fromConfig = Get-ConfigValue -Object $config -Name 'windowsServers' -Default @()
-    $winServers = @($fromConfig | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+$winServers = @()
+if ($selWin) {
+    $winServers = @($WindowsServer | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if (-not $winServers) {
+        $fromConfig = Get-ConfigValue -Object $config -Name 'windowsServers' -Default @()
+        $winServers = @($fromConfig | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    }
+    $winServers = @($winServers | Sort-Object -Unique)
 }
-$winServers = @($winServers | Sort-Object -Unique)
 
 foreach ($winSrv in $winServers) {
     Write-Host "Checking Windows OS on $winSrv ..."
@@ -1879,7 +1906,7 @@ $bareRun = -not $anyVersionCheck
 # Domain Controllers: discover them and read each one's OS version, into a separate
 # collection that the report renders as the first Infrastructure Check block.
 $dcResults = New-Object System.Collections.ArrayList
-$wantDcs = [bool]$All -or [bool]$DomainControllers -or [bool](Get-ConfigValue -Object $config -Name 'domainControllers' -Default $false)
+$wantDcs = $selDC -and (($selected -contains 'DomainControllers') -or [bool]$All -or [bool]$DomainControllers -or [bool](Get-ConfigValue -Object $config -Name 'domainControllers' -Default $false))
 if ($wantDcs) {
     Write-Host "Discovering domain controllers ..."
     $dcNames = @(Get-DomainControllerNames | Sort-Object -Unique)
@@ -1900,7 +1927,7 @@ if ($wantDcs) {
 }
 
 $replResult = $null
-if ([bool]$All -or [bool]$ReplicationSummary -or $bareRun -or $wantDcs -or [bool](Get-ConfigValue -Object $config -Name 'replicationSummary' -Default $false)) {
+if ($selRepl -and (($selected -contains 'Replication') -or [bool]$All -or [bool]$ReplicationSummary -or $bareRun -or $wantDcs -or [bool](Get-ConfigValue -Object $config -Name 'replicationSummary' -Default $false))) {
     Write-Host "Running repadmin /replsum ..."
     $replResult = Get-ReplicationSummary
     if ($replResult.Available) {
@@ -1913,7 +1940,7 @@ if ([bool]$All -or [bool]$ReplicationSummary -or $bareRun -or $wantDcs -or [bool
 }
 
 $fsmoResult = $null
-if ([bool]$All -or [bool]$FsmoRoles -or $bareRun -or $wantDcs -or [bool](Get-ConfigValue -Object $config -Name 'fsmoRoles' -Default $false)) {
+if ($selFsmo -and (($selected -contains 'FSMO') -or [bool]$All -or [bool]$FsmoRoles -or $bareRun -or $wantDcs -or [bool](Get-ConfigValue -Object $config -Name 'fsmoRoles' -Default $false))) {
     Write-Host "Reading FSMO role holders ..."
     $fsmoResult = Get-FsmoRoles
     if ($fsmoResult.Available) {

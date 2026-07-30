@@ -86,7 +86,10 @@ Options:
 - `-ComputerName <names>` - servers to scan, overriding the config
 - `-ConfigPath <path>` - a different config file (default: `config.json` next to the script)
 - `-OutputPath <path>` - where to write the HTML
-- `-Product <name>` - report only products whose name contains this string
+- `-System <name>` - pick which systems to check from a list (tab-completes): `ManageEngine`,
+  `VMware`, `Windows`, `DomainControllers`, `Replication`, `FSMO`, `All`. Only the chosen ones
+  run; targets still come from the config
+- `-Product <name>` - narrow the ManageEngine result to products whose name contains this string
 - `-Title <text>` - heading for the report
 - `-VCenter <names>` - vCenter servers to query, overriding the config
 - `-InstallPowerCLI` - agree up front to installing PowerCLI if it is needed
