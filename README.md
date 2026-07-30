@@ -83,29 +83,20 @@ If that path opens in Explorer, the script will work.
 
 Options:
 
-- `-ComputerName <names>` - servers to scan, overriding the config
+- `-System <name>` - which systems to check, from a list (tab-completes): `ManageEngine`,
+  `VMware`, `Windows`, `DomainControllers`, `Replication`, `FSMO`, `All`. Omit to run whatever
+  the config enables
+- `-ComputerName <names>` - ManageEngine servers to scan, overriding the config `servers`
+- `-VCenter <names>` - vCenter servers to query, overriding the config `vcenters`
+- `-WindowsServer <names>` - Windows servers whose OS version to report, overriding the config
+- `-IncludeEsxi` - also report the ESXi hosts of each vCenter (needs PowerCLI)
+- `-Product <name>` - narrow the ManageEngine result to products whose name contains this string
 - `-ConfigPath <path>` - a different config file (default: `config.json` next to the script)
 - `-OutputPath <path>` - where to write the HTML
-- `-System <name>` - pick which systems to check from a list (tab-completes): `ManageEngine`,
-  `VMware`, `Windows`, `DomainControllers`, `Replication`, `FSMO`, `All`. Only the chosen ones
-  run; targets still come from the config
-- `-Product <name>` - narrow the ManageEngine result to products whose name contains this string
 - `-Title <text>` - heading for the report
-- `-VCenter <names>` - vCenter servers to query, overriding the config
 - `-InstallPowerCLI` - agree up front to installing PowerCLI if it is needed
-- `-IncludeEsxi` - also report the ESXi hosts each vCenter manages, with their versions
-- `-DomainControllers` - discover every DC in the domain and report its OS version, replication
-  and FSMO roles - all in the Infrastructure Check tab
-- `-WindowsServer <names>` - a Windows server's OS version in the Versions tab (for non-DC
-  servers you want tracked alongside product versions)
-- `-All` - turn on every check at once: domain controllers, replication, FSMO and ESXi, plus
-  all ManageEngine servers, vCenters and Windows servers listed in the config
-- `-ReplicationSummary` - run `repadmin /replsum` and show it in the Infrastructure Check tab
-- `-FsmoRoles` - show the five FSMO role holders in the Infrastructure Check tab
-- `-NonInteractive` - never prompt and never install (for scheduled tasks); skip anything that
-  would need interaction
-- `-Show` - open the report in the browser when finished. Omit it for a scheduled task
-- `-Verbose` - log every root scanned, file read and API call attempted
+- `-NonInteractive` - never prompt and never install (for scheduled tasks)
+- `-Show` - open the report in the browser when finished
 
 Typical output:
 
@@ -173,22 +164,21 @@ only when a version check was requested.
 
 - **Infrastructure Check** (always present, shown first) - general health checks that are not a
   version, each in its own block, in this order:
-  - **Domain Controllers** - each DC with its OS version and build (`-DomainControllers`).
+  - **Domain Controllers** - each DC with its OS version and build (`-System DomainControllers`).
   - **AD replication** - `repadmin /replsum`, with a healthy / failures-detected badge.
   - **FSMO role holders** - the five roles and which DC holds each.
-  These run on a bare run (no parameters), on `-DomainControllers`, with
-  `-ReplicationSummary` / `-FsmoRoles`, or the matching config flags.
+  These run on a bare run (no parameters), when selected with `-System DomainControllers` /
+  `Replication` / `FSMO`, or via the matching config flags for a scheduled run.
 - **Versions** (only when a version check is requested) - one region per vendor (ManageEngine,
   VMware, Windows), subdivided by server, a row per item: name, version, build, IP address and
   source. Summary cards count items found, vendors, servers queried and anything with no result.
 
 A bare run therefore produces only the Infrastructure Check tab; asking for `servers`,
-`vcenters`, `windowsServers` or `-DomainControllers` adds the Versions tab.
+`vcenters` or `windowsServers` adds the Versions tab.
 
-`-All` is a shortcut that enables every check the environment and config allow - the AD checks
-(which discover their own targets) always run, and the ManageEngine / VMware / Windows checks
-run for whatever is listed in the config. It does not invent servers: list them in the config
-for those regions to appear.
+`-System All` (or the config lists) enables everything at once. The AD checks discover their own
+targets; the ManageEngine / VMware / Windows checks run for whatever the config lists - it does
+not invent servers.
 
 Nothing in the report claims to know whether a newer release exists: there is no reference
 version and no status column, because the tool never contacts the vendors.
@@ -348,13 +338,13 @@ Version 21H2 (OS Build 20348.xxxx)" that `winver` shows:
 
 ```powershell
 # every domain controller, discovered automatically
-.\Get-VersionInventory.ps1 -DomainControllers -Show
+.\Get-VersionInventory.ps1 -System DomainControllers -Show
 
 # or specific servers by name
 .\Get-VersionInventory.ps1 -WindowsServer DC01,DC02 -Show
 ```
 
-`-DomainControllers` (or `"domainControllers": true`) enumerates the DCs of the current domain
+`-System DomainControllers` (or `"domainControllers": true` for a scheduled run) enumerates the DCs of the current domain
 via .NET, so nothing has to be listed by hand and a new DC is picked up on its own. It needs no
 RSAT or ActiveDirectory module. The two can be combined; a DC covered both ways is checked once.
 
