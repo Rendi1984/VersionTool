@@ -147,7 +147,7 @@ Roots searched by default: `C:\ManageEngine`, `C:\Program Files\ManageEngine`,
 ## The report
 
 One region per vendor - ManageEngine, VMware - each subdivided by server, with a row per
-item: name, version, build, architecture, IP address and where the values came from. Summary cards at the
+item: name, version, build, IP address and where the values came from. Summary cards at the
 top count items found, vendors, servers queried and anything that returned nothing.
 
 Nothing in the report claims to know whether a newer release exists: there is no reference

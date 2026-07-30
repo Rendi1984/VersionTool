@@ -89,7 +89,7 @@ $ErrorActionPreference = 'Stop'
 
 # Keep in step with the VERSION file. Printed at startup and in the report so the running
 # copy identifies itself even if the file was renamed or copied elsewhere.
-$script:ToolVersion = '3.4.1'
+$script:ToolVersion = '3.4.2'
 
 # ---------------------------------------------------------------------------
 # Config
@@ -1053,7 +1053,6 @@ function New-MeHtmlReport {
         <td class="product">$(ConvertTo-HtmlText $r.Name)</td>
         <td class="version">-</td>
         <td class="build">-</td>
-        <td>-</td>
         <td>$(ConvertTo-HtmlText $ip)</td>
         <td class="detail">$(ConvertTo-HtmlText $r.Error)</td>
       </tr>
@@ -1067,16 +1066,11 @@ function New-MeHtmlReport {
             $build = $r.Build
             if ([string]::IsNullOrWhiteSpace($build)) { $build = '-' }
 
-            $architecture = $r.Architecture
-            if ([string]::IsNullOrWhiteSpace($architecture)) { $architecture = '-' }
-            else { $architecture = "$architecture-bit" }
-
             $row = @"
       <tr>
         <td class="product">$(ConvertTo-HtmlText $r.Name)<span class="sub">$(ConvertTo-HtmlText $r.InstallPath)</span></td>
         <td class="version">$(ConvertTo-HtmlText $version)</td>
         <td class="build">$(ConvertTo-HtmlText $build)</td>
-        <td>$(ConvertTo-HtmlText $architecture)</td>
         <td>$(ConvertTo-HtmlText $ip)</td>
         <td class="detail">$(ConvertTo-HtmlText $r.Source)</td>
       </tr>
@@ -1100,7 +1094,6 @@ function New-MeHtmlReport {
               <th>Product</th>
               <th>Version</th>
               <th>Build</th>
-              <th>Architecture</th>
               <th>IP address</th>
               <th>Source</th>
             </tr>
