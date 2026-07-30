@@ -89,7 +89,7 @@ $ErrorActionPreference = 'Stop'
 
 # Keep in step with the VERSION file. Printed at startup and in the report so the running
 # copy identifies itself even if the file was renamed or copied elsewhere.
-$script:ToolVersion = '3.3.0'
+$script:ToolVersion = '3.4.0'
 
 # ---------------------------------------------------------------------------
 # Config
@@ -193,6 +193,29 @@ function Get-SearchRoots {
     )
     if ($Extra) { $roots += $Extra }
     return $roots
+}
+
+function Resolve-IPv4 {
+    <#
+        First IPv4 address a name resolves to, or '' when it cannot be resolved. Used to
+        show an IP alongside each server in the report.
+    #>
+    param([string]$Name)
+
+    if ([string]::IsNullOrWhiteSpace($Name)) { return '' }
+
+    # Already an IP literal.
+    $parsed = $null
+    if ([System.Net.IPAddress]::TryParse($Name, [ref]$parsed)) { return $Name }
+
+    try {
+        $addresses = [System.Net.Dns]::GetHostAddresses($Name)
+        foreach ($a in @($addresses)) {
+            if ($a.AddressFamily -eq 'InterNetwork') { return $a.IPAddressToString }
+        }
+    }
+    catch { }
+    return ''
 }
 
 function Test-IsLocalComputer {
@@ -409,6 +432,7 @@ function Get-MeProductsOnServer {
 
     $results   = New-Object System.Collections.ArrayList
     $rootsSeen = 0
+    $serverIp  = Resolve-IPv4 -Name $Computer
 
     foreach ($localRoot in (Get-SearchRoots -Extra $ExtraRoots)) {
         $root = ConvertTo-RemotePath -Path $localRoot -Computer $Computer
@@ -443,6 +467,7 @@ function Get-MeProductsOnServer {
             $record = [pscustomobject]@{
                 Vendor       = 'ManageEngine'
                 Server       = $Computer
+                IPAddress    = $serverIp
                 Name         = $displayName
                 FolderName   = $dir.Name
                 Version      = $conf.Version
@@ -498,6 +523,7 @@ function Get-MeProductsOnServer {
             $record = [pscustomobject]@{
                 Vendor       = 'ManageEngine'
                 Server       = $Computer
+                IPAddress    = $serverIp
                 Name         = $displayName
                 FolderName   = (Split-Path -Leaf $hint)
                 Version      = $conf.Version
@@ -537,6 +563,7 @@ function Get-MeProductsOnServer {
         [void]$results.Add([pscustomobject]@{
             Vendor       = 'ManageEngine'
             Server       = $Computer
+            IPAddress    = $serverIp
             Name         = 'No products found'
             FolderName   = $null
             Version      = $null
@@ -792,6 +819,7 @@ function Get-VMwareInventoryViaPowerCLI {
             [void]$records.Add([pscustomobject]@{
                 Vendor       = 'VMware'
                 Server       = $Server
+                IPAddress    = (Resolve-IPv4 -Name $Server)
                 Name         = 'VMware vCenter Server'
                 FolderName   = $null
                 Version      = [string]$connection.Version
@@ -817,9 +845,19 @@ function Get-VMwareInventoryViaPowerCLI {
         }
 
         foreach ($esx in @($hosts)) {
+            $esxIp = ''
+            try {
+                $vmk = Get-VMHostNetworkAdapter -VMHost $esx -VMKernel -ErrorAction Stop |
+                       Where-Object { $_.ManagementTrafficEnabled }
+                $esxIp = [string](@($vmk)[0].IP)
+            }
+            catch { }
+            if ([string]::IsNullOrWhiteSpace($esxIp)) { $esxIp = Resolve-IPv4 -Name ([string]$esx.Name) }
+
             [void]$records.Add([pscustomobject]@{
                 Vendor       = 'VMware'
                 Server       = $Server
+                IPAddress    = $esxIp
                 Name         = "ESXi - $($esx.Name)"
                 FolderName   = $null
                 Version      = [string]$esx.Version
@@ -878,6 +916,7 @@ function Get-VMwareVersions {
             Source       = $null
             Found        = $false
             Error        = "The name '$Server' could not be resolved by DNS. Check the spelling of the vCenter hostname."
+            IPAddress    = ''
             CheckedAt    = (Get-Date)
         })
     }
@@ -898,6 +937,7 @@ function Get-VMwareVersions {
             Source       = $null
             Found        = $false
             Error        = 'No credentials available. Set VCENTER_USER and VCENTER_PASSWORD, or run interactively once to store an encrypted credential.'
+            IPAddress    = (Resolve-IPv4 -Name $Server)
             CheckedAt    = (Get-Date)
         })
     }
@@ -908,6 +948,7 @@ function Get-VMwareVersions {
         [void]$records.Add([pscustomobject]@{
             Vendor       = 'VMware'
             Server       = $Server
+            IPAddress    = (Resolve-IPv4 -Name $Server)
             Name         = $rest.Product
             FolderName   = $null
             Version      = $rest.Version
@@ -957,6 +998,7 @@ function Get-VMwareVersions {
         Source       = $null
         Found        = $false
         Error        = "Neither the REST API nor PowerCLI returned a version. Check that https://$Server is reachable on TCP 443, that the credentials are valid, and run with -Verbose to see each attempt."
+        IPAddress    = (Resolve-IPv4 -Name $Server)
         CheckedAt    = (Get-Date)
     })
 }
@@ -1002,6 +1044,9 @@ function New-MeHtmlReport {
         $rows = New-Object System.Collections.ArrayList
 
         foreach ($r in ($group.Group | Sort-Object Name)) {
+            $ip = $r.IPAddress
+            if ([string]::IsNullOrWhiteSpace($ip)) { $ip = '-' }
+
             if (-not $r.Found) {
                 $row = @"
       <tr class="missing">
@@ -1009,6 +1054,7 @@ function New-MeHtmlReport {
         <td class="version">-</td>
         <td class="build">-</td>
         <td>-</td>
+        <td>$(ConvertTo-HtmlText $ip)</td>
         <td class="detail">$(ConvertTo-HtmlText $r.Error)</td>
       </tr>
 "@
@@ -1031,6 +1077,7 @@ function New-MeHtmlReport {
         <td class="version">$(ConvertTo-HtmlText $version)</td>
         <td class="build">$(ConvertTo-HtmlText $build)</td>
         <td>$(ConvertTo-HtmlText $architecture)</td>
+        <td>$(ConvertTo-HtmlText $ip)</td>
         <td class="detail">$(ConvertTo-HtmlText $r.Source)</td>
       </tr>
 "@
@@ -1054,6 +1101,7 @@ function New-MeHtmlReport {
               <th>Version</th>
               <th>Build</th>
               <th>Arch</th>
+              <th>IP address</th>
               <th>Source</th>
             </tr>
           </thead>
