@@ -87,7 +87,8 @@ Options:
 - `-Product <name>` - report only products whose name contains this string
 - `-Title <text>` - heading for the report
 - `-VCenter <names>` - vCenter servers to query, overriding the config
-- `-InstallPowerCLI` - agree up front to installing PowerCLI if the REST route fails
+- `-InstallPowerCLI` - agree up front to installing PowerCLI if it is needed
+- `-IncludeEsxi` - also report the ESXi hosts each vCenter manages, with their versions
 - `-NonInteractive` - never prompt and never install; skip anything that would need it
 - `-Show` - open the report when finished
 - `-Verbose` - log every root scanned, file read and API call attempted
@@ -118,6 +119,7 @@ is scanned.
   "servers": ["KMP01", "ADAUDIT01", "ADSSP01"],
   "searchRoots": [],
   "vcenters": ["vcenter01.lab.local"],
+  "includeEsxi": false,
   "credentialFolder": "",
   "skipCertificateCheck": true,
   "timeoutSec": 30
@@ -131,6 +133,7 @@ is scanned.
 | `servers` | Servers to scan. **Empty (`[]`) means the machine the script runs on** - the normal setup when the tool sits on one of the product servers |
 | `searchRoots` | Extra folders to search, for installations outside the conventional locations, e.g. `["F:\\Apps\\ManageEngine"]` |
 | `vcenters` | vCenter hostnames to query. Empty means VMware is skipped entirely |
+| `includeEsxi` | Also list the ESXi hosts of each vCenter (needs PowerCLI). Default `false` |
 | `credentialFolder` | Where encrypted vCenter credentials are stored. Empty means `credentials\` next to the script |
 | `skipCertificateCheck` | Accept vCenter's self-signed certificate. Default `true` |
 | `timeoutSec` | Per REST call. Default 30 |
@@ -274,9 +277,17 @@ certificate. Set it to `false` once vCenter carries a trusted certificate.
 
 ### ESXi hosts
 
-ESXi versions come from PowerCLI's `Get-VMHost`, so they appear only when the PowerCLI route
-runs. When REST answers, the report shows the vCenter appliance alone - which is the common
-case, and enough for tracking vCenter patch level.
+By default the report shows the vCenter appliance alone. To also list every ESXi host it
+manages, with each host's version and build, add `-IncludeEsxi` (or `"includeEsxi": true` in
+the config):
+
+```powershell
+.\Get-VersionInventory.ps1 -VCenter vcenter01.lab.local -IncludeEsxi -Show
+```
+
+ESXi versions are **not** exposed by the vCenter REST API, so this route uses PowerCLI - the
+same install-on-consent flow applies. If PowerCLI is unavailable and you decline installing it,
+the vCenter is still reported and a warning notes that the hosts were skipped.
 
 ## Next steps
 

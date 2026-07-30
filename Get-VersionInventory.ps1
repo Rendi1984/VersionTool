@@ -46,6 +46,10 @@
 .PARAMETER OutputPath
     Path of the HTML report. Overrides "outputPath" from the config.
 
+.PARAMETER IncludeEsxi
+    Also report the ESXi hosts managed by each vCenter, with their versions. This needs
+    PowerCLI, because ESXi versions are not exposed by the vCenter REST API.
+
 .PARAMETER Show
     Open the report in the default browser when done.
 
@@ -75,6 +79,7 @@ param(
     [string]$Title,
     [string[]]$VCenter,
     [switch]$InstallPowerCLI,
+    [switch]$IncludeEsxi,
     [switch]$NonInteractive,
     [switch]$Show
 )
@@ -84,7 +89,7 @@ $ErrorActionPreference = 'Stop'
 
 # Keep in step with the VERSION file. Printed at startup and in the report so the running
 # copy identifies itself even if the file was renamed or copied elsewhere.
-$script:ToolVersion = '3.2.2'
+$script:ToolVersion = '3.3.0'
 
 # ---------------------------------------------------------------------------
 # Config
@@ -753,7 +758,7 @@ function Get-VMwareInventoryViaPowerCLI {
         only covers the vCenter appliance itself.
         Returns an array of records, or $null when PowerCLI could not be used.
     #>
-    param([string]$Server, $Credential, [bool]$SkipCertificateCheck)
+    param([string]$Server, $Credential, [bool]$SkipCertificateCheck, [bool]$VCenterOnHand, [bool]$IncludeEsxi = $true)
 
     try {
         Import-Module VMware.VimAutomation.Core -ErrorAction Stop
@@ -782,27 +787,33 @@ function Get-VMwareInventoryViaPowerCLI {
 
     $records = New-Object System.Collections.ArrayList
     try {
-        [void]$records.Add([pscustomobject]@{
-            Vendor       = 'VMware'
-            Server       = $Server
-            Name         = 'VMware vCenter Server'
-            FolderName   = $null
-            Version      = [string]$connection.Version
-            Build        = [string]$connection.Build
-            Architecture = $null
-            InstallPath  = $null
-            Source       = "PowerCLI Connect-VIServer $Server"
-            Found        = $true
-            Error        = $null
-            CheckedAt    = (Get-Date)
-        })
-
-        try {
-            $hosts = Get-VMHost -ErrorAction Stop
+        # Skip the vCenter row when REST already produced it, so it is not listed twice.
+        if (-not $VCenterOnHand) {
+            [void]$records.Add([pscustomobject]@{
+                Vendor       = 'VMware'
+                Server       = $Server
+                Name         = 'VMware vCenter Server'
+                FolderName   = $null
+                Version      = [string]$connection.Version
+                Build        = [string]$connection.Build
+                Architecture = $null
+                InstallPath  = $null
+                Source       = "PowerCLI Connect-VIServer $Server"
+                Found        = $true
+                Error        = $null
+                CheckedAt    = (Get-Date)
+            })
         }
-        catch {
-            Write-Verbose "[$Server] could not list ESXi hosts: $($_.Exception.Message)"
-            $hosts = @()
+
+        $hosts = @()
+        if ($IncludeEsxi) {
+            try {
+                $hosts = Get-VMHost -ErrorAction Stop
+            }
+            catch {
+                Write-Verbose "[$Server] could not list ESXi hosts: $($_.Exception.Message)"
+                $hosts = @()
+            }
         }
 
         foreach ($esx in @($hosts)) {
@@ -841,7 +852,8 @@ function Get-VMwareVersions {
         [bool]$SkipCertificateCheck,
         [int]$TimeoutSec,
         [bool]$AllowPrompt,
-        [bool]$AutoInstallPowerCLI
+        [bool]$AutoInstallPowerCLI,
+        [bool]$IncludeEsxi
     )
 
     # Resolve the name first: a typo like "vc.lab.locala" should fail here, cheaply, rather
@@ -892,7 +904,8 @@ function Get-VMwareVersions {
 
     $rest = Get-VCenterVersionViaRest -Server $Server -Credential $credential -TimeoutSec $TimeoutSec
     if ($rest) {
-        return @([pscustomobject]@{
+        $records = New-Object System.Collections.ArrayList
+        [void]$records.Add([pscustomobject]@{
             Vendor       = 'VMware'
             Server       = $Server
             Name         = $rest.Product
@@ -906,12 +919,29 @@ function Get-VMwareVersions {
             Error        = $null
             CheckedAt    = (Get-Date)
         })
+
+        # ESXi host versions are not exposed by the vCenter REST API, so getting them means
+        # PowerCLI even though REST already answered for the appliance itself.
+        if ($IncludeEsxi) {
+            if (Test-PowerCLIAvailable -AllowPrompt $AllowPrompt -AutoInstall $AutoInstallPowerCLI) {
+                $hosts = Get-VMwareInventoryViaPowerCLI -Server $Server -Credential $credential `
+                            -SkipCertificateCheck $SkipCertificateCheck -VCenterOnHand $true -IncludeEsxi $true
+                foreach ($h in @($hosts)) { [void]$records.Add($h) }
+            }
+            else {
+                Write-Warning "[$Server] ESXi host versions were requested but PowerCLI is not available - reporting the vCenter only."
+            }
+        }
+
+        return $records.ToArray()
     }
 
     Write-Verbose "[$Server] REST returned no version - trying PowerCLI"
 
     if (Test-PowerCLIAvailable -AllowPrompt $AllowPrompt -AutoInstall $AutoInstallPowerCLI) {
-        $viaPowerCli = Get-VMwareInventoryViaPowerCLI -Server $Server -Credential $credential -SkipCertificateCheck $SkipCertificateCheck
+        # REST gave nothing, so let PowerCLI report the vCenter too; hosts only if asked.
+        $viaPowerCli = Get-VMwareInventoryViaPowerCLI -Server $Server -Credential $credential `
+                            -SkipCertificateCheck $SkipCertificateCheck -VCenterOnHand $false -IncludeEsxi $IncludeEsxi
         if ($viaPowerCli) { return $viaPowerCli }
     }
 
@@ -1270,6 +1300,8 @@ if ($vCenters) {
     $skipCert         = [bool](Get-ConfigValue -Object $config -Name 'skipCertificateCheck' -Default $true)
     $timeoutSec       = [int](Get-ConfigValue -Object $config -Name 'timeoutSec' -Default 30)
     $allowPrompt      = -not $NonInteractive
+    # -IncludeEsxi wins; otherwise honour "includeEsxi" from the config.
+    $wantEsxi         = [bool]$IncludeEsxi -or [bool](Get-ConfigValue -Object $config -Name 'includeEsxi' -Default $false)
 
     foreach ($vc in $vCenters) {
         Write-Host "Querying vCenter $vc ..."
@@ -1279,7 +1311,8 @@ if ($vCenters) {
                             -SkipCertificateCheck $skipCert `
                             -TimeoutSec $timeoutSec `
                             -AllowPrompt $allowPrompt `
-                            -AutoInstallPowerCLI ([bool]$InstallPowerCLI)
+                            -AutoInstallPowerCLI ([bool]$InstallPowerCLI) `
+                            -IncludeEsxi $wantEsxi
         $vmwareRecords = @($vmwareRecords)
 
         foreach ($record in $vmwareRecords) {

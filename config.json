@@ -4,6 +4,7 @@
   "servers": [],
   "searchRoots": [],
   "vcenters": [],
+  "includeEsxi": false,
   "credentialFolder": "",
   "skipCertificateCheck": true,
   "timeoutSec": 30
