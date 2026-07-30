@@ -84,7 +84,7 @@ $ErrorActionPreference = 'Stop'
 
 # Keep in step with the VERSION file. Printed at startup and in the report so the running
 # copy identifies itself even if the file was renamed or copied elsewhere.
-$script:ToolVersion = '3.2.1'
+$script:ToolVersion = '3.2.2'
 
 # ---------------------------------------------------------------------------
 # Config
@@ -843,6 +843,32 @@ function Get-VMwareVersions {
         [bool]$AllowPrompt,
         [bool]$AutoInstallPowerCLI
     )
+
+    # Resolve the name first: a typo like "vc.lab.locala" should fail here, cheaply, rather
+    # than after prompting for a credential and installing PowerCLI only to hit "could not
+    # resolve the requested VC server" at the very end.
+    $resolves = $true
+    try { [void][System.Net.Dns]::GetHostEntry($Server) }
+    catch {
+        try { [void][System.Net.Dns]::GetHostAddresses($Server) }
+        catch { $resolves = $false }
+    }
+    if (-not $resolves) {
+        return @([pscustomobject]@{
+            Vendor       = 'VMware'
+            Server       = $Server
+            Name         = 'vCenter'
+            FolderName   = $null
+            Version      = $null
+            Build        = $null
+            Architecture = $null
+            InstallPath  = $null
+            Source       = $null
+            Found        = $false
+            Error        = "The name '$Server' could not be resolved by DNS. Check the spelling of the vCenter hostname."
+            CheckedAt    = (Get-Date)
+        })
+    }
 
     if ($SkipCertificateCheck) { Initialize-CertificateBypass }
 
