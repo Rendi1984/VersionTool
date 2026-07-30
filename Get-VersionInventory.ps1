@@ -101,7 +101,7 @@ $ErrorActionPreference = 'Stop'
 
 # Keep in step with the VERSION file. Printed at startup and in the report so the running
 # copy identifies itself even if the file was renamed or copied elsewhere.
-$script:ToolVersion = '3.7.0'
+$script:ToolVersion = '3.7.1'
 
 # ---------------------------------------------------------------------------
 # Config
@@ -1363,9 +1363,10 @@ $sectionsHtml
     }
 
     # ---- Infrastructure Check tab (general checks, e.g. AD replication) ------
+    # Order: AD replication first, then FSMO role holders.
     $infraBlocks = New-Object System.Collections.ArrayList
 
-    # FSMO role holders - its own block, first.
+    $fsmoBlock = $null
     if ($null -ne $Fsmo) {
         if ($Fsmo.Available) {
             $fsmoRows = New-Object System.Collections.ArrayList
@@ -1403,7 +1404,6 @@ $($fsmoRows -join "`r`n")
   </div>
 "@
         }
-        [void]$infraBlocks.Add($fsmoBlock)
     }
 
     if ($null -ne $ReplSummary) {
@@ -1430,6 +1430,9 @@ $($fsmoRows -join "`r`n")
 "@
         [void]$infraBlocks.Add($replBlock)
     }
+
+    # FSMO after replication.
+    if ($null -ne $fsmoBlock) { [void]$infraBlocks.Add($fsmoBlock) }
 
     $infraHtml = ($infraBlocks -join "`r`n")
     if ([string]::IsNullOrWhiteSpace($infraHtml)) {
